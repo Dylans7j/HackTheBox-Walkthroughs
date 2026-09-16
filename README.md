@@ -1,66 +1,53 @@
-<div align="center">
+# Hack The Box Walkthroughs
 
-# 🗃️ HackTheBox Walkthroughs
+Sanitized notes from authorized Hack The Box lab work, organized around repeatable methodology, evidence, and remediation.
 
-![Machines](https://img.shields.io/badge/Machines-11-blue?style=flat-square)
-![Rooted](https://img.shields.io/badge/Fully%20Rooted-9-success?style=flat-square)
-![WIP](https://img.shields.io/badge/In%20Progress-2-yellow?style=flat-square)
+> Repository status: publication review in progress.
 
-Evidence-first, reproducible writeups documenting methodology, exploitation chains, and remediation for every box.
+## Publication rules
 
-`BUILD // ATTACK // DETECT // DOCUMENT`
+- Publish only retired machines or material permitted by HTB.
+- Remove flags, credentials, private keys, tokens, and raw proof strings.
+- Redact target-specific data that does not improve the learning value.
+- Separate confirmed findings from hypotheses and next steps.
+- Do not label service exposure or version detection as a vulnerability without validation.
+- Include remediation and detection opportunities where the evidence supports them.
 
-</div>
+## Current inventory
 
----
+The repository currently contains nine machine-note files. Each entry remains marked **Review required** until retirement status, redaction, internal links, and evidence quality have been checked.
 
-## 📋 Machines
+| Machine notes | Platform | Publication status |
+| --- | --- | --- |
+| [Bizness](./bizness.md) | Linux | Review required |
+| [Browsed](./browsed.md) | Linux | Review required |
+| [Devel](./devel.md) | Windows | Review required |
+| [Facts](./facts.md) | Linux | Review required |
+| [Job](./job.md) | Windows | Review required |
+| [Kobold](./kobold-hybrid.md) | Linux | Review required |
+| [Overwatch](./overwatch.md) | Windows / AD | Review required |
+| [Principal](./principal.md) | Linux | Review required |
+| [Pterodactyl](./pterodactyl.md) | Linux | Review required |
 
-| Machine | OS | Difficulty | Key Technique | Status |
-|---|:---:|:---:|---|:---:|
-| [Kobold](./kobold.md) | 🐧 Linux | Easy | Unauth MCP RCE → Docker group → root | ✅ Rooted |
-| [Facts](./facts.md) | 🐧 Linux | Easy | Open registration → LFI → SSH key crack → `facter` sudo abuse | ✅ Rooted |
-| [Nibbles](./nibbles.md) | 🐧 Linux | Easy | Leaky private dir → CVE-2015-6967 → sudo misconfig | ✅ Rooted |
-| [Devel](./devel.md) | 🪟 Windows | Easy | Anonymous FTP write to IIS webroot | 🟡 WIP |
-| [Job](./job.md) | 🪟 Windows | Medium | Open SMTP relay phishing → macro RCE → PrintSpoofer | ✅ Rooted |
-| [Bitlab](./bitlab.md) | 🐧 Linux | Medium | Leaked creds in obfuscated JS (GitLab) | 🟡 WIP |
-| [Pterodactyl](./pterodactyl.md) | 🐧 Linux | Medium | LFI → PEAR RCE → CVE-2021-3802 (udisks2) | ✅ Rooted |
-| [Browsed](./browsed.md) | 🐧 Linux | Medium | Malicious Chrome extension → SSRF → `.pyc` cache poisoning | ✅ Rooted |
-| [Bizness](./bizness.md) | 🐧 Linux | Medium | Apache OFBiz pre-auth RCE → Derby DB hash → password reuse | ✅ Rooted |
-| [Overwatch](./overwatch.md) | 🪟 Windows AD | Medium | Guest SMB → SQL linked-server leak → WCF command injection | ✅ Rooted |
-| [Principal](./principal.md) | 🐧 Linux | Medium | pac4j JWT forgery (CVE-2026-29000) → leaked SSH CA key | ✅ Rooted |
+## Required case-study format
 
----
+1. Executive summary
+2. Authorized scope
+3. Attack-surface discovery
+4. Validated attack path
+5. Privilege-escalation path
+6. Evidence index
+7. Demonstrated impact
+8. Remediation
+9. Detection opportunities
+10. Lessons learned
 
-## 🏷️ By Technique
+## Evidence standard
 
-**Web / API Exploitation**
-[Principal](./principal.md) · [Pterodactyl](./pterodactyl.md) · [Bizness](./bizness.md) · [Nibbles](./nibbles.md) · [Facts](./facts.md) · [Kobold](./kobold.md)
+A finding should include the exact observable behavior, a sanitized supporting artifact or output excerpt, reproduction steps, impact demonstrated in the lab, and specific remediation. Potential weaknesses remain hypotheses until validated.
 
-**Active Directory**
-[Overwatch](./overwatch.md)
+## Safety
 
-**Phishing / Client-Side**
-[Job](./job.md) · [Browsed](./browsed.md)
+All activity represented here is limited to authorized training environments. This repository should not contain active-machine spoilers or sensitive authentication material. Entries that have not completed publication review should not be promoted as portfolio case studies.
 
-**Credential Exposure / Reuse**
-[Bitlab](./bitlab.md) · [Bizness](./bizness.md) · [Overwatch](./overwatch.md)
-
-**Misconfiguration (sudo, ACLs, permissions)**
-[Nibbles](./nibbles.md) · [Job](./job.md) · [Kobold](./kobold.md) · [Devel](./devel.md)
-
----
-
-## 🎯 Format
-
-Every writeup follows the same structure: recon, narrative walkthrough of the foothold and privilege-escalation chain, an attack-timeline, and a remediation table mapping each finding to a fix. IP addresses and flag values are redacted throughout — the methodology is the point, not the specific lab instance.
-
-Two entries are marked **WIP** — recon and the confirmed vulnerability are documented, but the full exploitation chain and proof weren't logged and will be backfilled.
-
----
-
-<div align="center">
-
-*Maintained by [Dylans7j](https://github.com/Dylans7j) — see the [profile README](https://github.com/Dylans7j/Dylans7j) for the full security portfolio.*
-
-</div>
+Maintained by [Dylans7j](https://github.com/Dylans7j). The primary defensive-security project is the [SOC–Active Directory Lab](https://github.com/Dylans7j/SOC-Lab).
