@@ -29,6 +29,10 @@ The repository currently contains nine machine-note files. Each entry remains ma
 | [Principal](./principal.md) | Linux | Review required |
 | [Pterodactyl](./pterodactyl.md) | Linux | Review required |
 
+## Notion evidence update — 2026-09-24
+
+The [completion inventory and publication queue](./PUBLICATION-QUEUE.md) records 62 Rooted source records across 61 distinct names. Nine have existing walkthroughs here; 52 distinct names await publication review. See the [source and screenshot review](./EVIDENCE-REVIEW.md) for what was actually available, including Job’s careers-page screenshot.
+
 ## Required case-study format
 
 1. Executive summary
