@@ -51,3 +51,9 @@ A finding should include the exact observable behavior, a sanitized supporting a
 All activity represented here is limited to authorized training environments. This repository should not contain active-machine spoilers or sensitive authentication material. Entries that have not completed publication review should not be promoted as portfolio case studies.
 
 Maintained by [Dylans7j](https://github.com/Dylans7j). The primary defensive-security project is the [SOC–Active Directory Lab](https://github.com/Dylans7j/SOC-Lab).
+
+## Related detection-engineering work
+
+The companion [SOC-Lab](https://github.com/Dylans7j/SOC-Lab) now documents verified Windows 11 → Splunk ingestion of Security, System, PowerShell and Sysmon telemetry, including the resolution of a Sysmon read-permission failure. The next milestone is a controlled Active Directory authentication investigation with validated SPL and Sigma detections.
+
+Public project documentation uses `192.169.70.x` only as a redaction placeholder. Do not publish actual lab, VPN or HTB target addresses unless publication is explicitly permitted. The placeholder is not an address to configure.
