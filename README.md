@@ -15,7 +15,7 @@ Sanitized notes from authorized Hack The Box lab work, organized around repeatab
 
 ## Current inventory
 
-The repository currently contains nine machine-note files. Each entry remains marked **Review required** until retirement status, redaction, internal links, and evidence quality have been checked.
+The repository currently contains ten machine-note files. Each entry remains marked **Review required** until retirement status, redaction, internal links, and evidence quality have been checked.
 
 | Machine notes | Platform | Publication status |
 | --- | --- | --- |
@@ -24,6 +24,7 @@ The repository currently contains nine machine-note files. Each entry remains ma
 | [Devel](./devel.md) | Windows | Review required |
 | [Facts](./facts.md) | Linux | Review required |
 | [Job](./job.md) | Windows | Review required |
+| [Love](./love.md) | Windows | Published; redacted evidence review |
 | [Kobold](./kobold-hybrid.md) | Linux | Review required |
 | [Overwatch](./overwatch.md) | Windows / AD | Review required |
 | [Principal](./principal.md) | Linux | Review required |
