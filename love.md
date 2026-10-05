@@ -1,71 +1,100 @@
-# Love — Hack The Box walkthrough
+# Love — Security Assessment
 
-**Platform:** Hack The Box (retired machine)  
-**OS / difficulty:** Windows / Easy  
-**Outcome:** User shell obtained; `NT AUTHORITY\SYSTEM` verified  
-**Scope:** Authorized HTB lab. Target and VPN addresses, flags, and recovered password are omitted from this public version.
+| Field | Value |
+| --- | --- |
+| Platform | Hack The Box |
+| Operating system | Windows |
+| Difficulty | Easy |
+| Assessment date | Not recorded (from existing notes; timezone not recorded) |
+| Author | Dylan Senez / d4rkgunn3r |
+| Review status | Proposed revision; publication eligibility and evidence review pending |
 
-## Executive summary
+## 1. Executive summary
 
-The target hosted a Voting System on HTTP port 80 and a separate staging site. The staging site's URL checker fetched an otherwise inaccessible local web endpoint on port 5000 and exposed a Voting System administrator credential. After authenticating, an unrestricted image upload in the application's voter workflow allowed a PHP file to execute. Local enumeration found `AlwaysInstallElevated` enabled in both machine and user policy hives. Installing a controlled MSI from the low-privilege shell produced a new shell whose `whoami` output was `nt authority\system`.
+The reviewed report documents a staging URL checker exposing an internal credential dashboard, an authenticated upload producing a Windows shell, and Windows Installer policy elevation to SYSTEM.
 
-## Reconnaissance
+## 2. Scope and authorization
+
+This account concerns the assigned HTB laboratory target only. Target addresses, VPN information, secrets, and flag contents are excluded. This revision analyzes recorded work; no assessment commands were executed during the editorial review. Machine retirement status has not been freshly verified.
+
+## 3. Methodology and reproducibility
+
+Discovery → service analysis → recorded access path → privilege/impact assessment → evidence review → remediation. Commands below support authorized discovery and identity verification. Exploitation is described at the finding level; operational payloads and secret-extraction procedures are omitted.
+
+Set the address of the currently assigned lab instance before discovery:
 
 ```bash
-nmap -sVC -p- TARGET -T3 --min-rate 5000 -oA Love
+export TARGET_IP='REPLACE_WITH_ASSIGNED_LAB_IP'
+mkdir -p evidence/love/{scans,screenshots}
+nmap -sV -p 80,443,445,5000,5985,5986 -oA evidence/love/scans/services "$TARGET_IP"
 ```
 
-The scan showed Apache/PHP on port 80 (Voting System), Apache endpoints on 443 and 5000 returning HTTP 403, SMB on 445, WinRM on 5985/5986, and a TLS certificate naming `staging.love.htb`. The exposed services were leads, not vulnerabilities by themselves. The initial scan took about 193 seconds. Direct requests to port 5000 returned 403.
+This is a proposed targeted confirmation command, not the original full-port scan. Nmap creates traffic and local output files. Record tool versions, instance date, and timezone; compare results with the observations below rather than assuming the same services are still present.
 
-The staging site was reachable over **HTTP** at `http://staging.love.htb/beta.php`; HTTPS on port 443 returned 403. Its file checker accepted a URL. Supplying `http://127.0.0.1:5000/` caused the application to fetch the password dashboard from the target's own loopback interface. The dashboard displayed the Voting System admin credential. This demonstrates server-side request forgery (SSRF) crossing the web service's access boundary. Do not put the password in a public screenshot or repository.
+## 4. Reconnaissance and service analysis
 
-## Authenticated upload and foothold
+HTTP Voting System; staging hostname from TLS certificate; direct local-dashboard service access returned HTTP 403. Direct denial did not establish denial to server-originated requests.
 
-The credentials authenticated to the application's `/admin/` path. An authenticated Voting System 1.0 upload PoC targeted `admin/voters_add.php`, submitted a PHP file as the voter `photo`, and requested it from `/images/`. The original PoC assumed `/votesystem/admin/`, which returned 404 on this instance; removing `/votesystem` corrected the paths. The PoC's HTTP 200 checks alone were weak evidence, but the listener received a connection from the HTB target and presented a Windows command shell at `C:\xampp\htdocs\omrs\images>`.
+> **EV-001 — Evidence placeholder:** add the reviewed service-scan excerpt and screenshot here. Remove sensitive identifiers. No screenshot file is claimed to exist at this placeholder.
 
-The third-party PoC contained an opaque encoded executable. Its exact payload is intentionally excluded here. Review downloaded exploits before running them; a simpler controlled upload can validate the same vulnerability. The admin credential was an application credential: a test against SMB returned `STATUS_LOGON_FAILURE`, which did not invalidate the web login.
+## 5. Recorded initial-access path
 
-## Local privilege escalation
+The URL checker reached the local dashboard from the server context. Application authentication and an executable upload yielded a shell. The report distinguishes PoC success messages from the received shell and records correction of an incorrect application base path.
 
-`whoami /priv` showed no obvious impersonation or backup privilege. Both required Windows Installer policy values were present:
+> **EV-002 — Evidence placeholder:** add a sanitized artifact establishing the behavior and resulting identity. An HTTP success response or tool success message alone does not prove code execution.
 
-```text
-HKLM\SOFTWARE\Policies\Microsoft\Windows\Installer
-  AlwaysInstallElevated    REG_DWORD    0x1
-HKCU\SOFTWARE\Policies\Microsoft\Windows\Installer
-  AlwaysInstallElevated    REG_DWORD    0x1
+## 6. Privilege escalation and impact validation
+
+Both HKLM and HKCU AlwaysInstallElevated values were 0x1. An initial installation failed because the file was absent at the assumed path. A later verified file location led to a new shell with nt authority\system.
+
+In an already authorized session, record identity without reading objective contents:
+
+```powershell
+whoami
+hostname
+whoami /priv
 ```
 
-This configuration permits a low-privilege user to install an MSI with elevated installer privileges. A test MSI was transferred over the HTB VPN. The first attempt did not produce a callback because the MSI was not present at the assumed `C:\Windows\Temp\` path. A later directory listing confirmed a 159,744-byte MSI in the writable application images directory. Executing `msiexec /i` against that verified path yielded a second connection. In the new shell:
+These are proposed identity-verification commands, not a claim of rerunning the assessment. Windows privilege enumeration does not prove successful elevation; Linux sudo policy alone does not prove a root session.
 
-```text
-C:\WINDOWS\system32>whoami
-nt authority\system
-```
+> **EV-003 — Evidence placeholder:** add policy/permission evidence and the resulting identity or access proof. Never include flags, tokens, private keys, hashes of credentials, or password values.
 
-The SYSTEM identity is directly supported by the provided terminal screenshot. Flag values were not included in the evidence supplied for this article; no flag value or submission is claimed here.
+## 7. Evidence register and limitations
 
-## Evidence and limits
-
-| Observation | Evidence supplied | Confidence |
+| ID | Required artifact | Current status |
 | --- | --- | --- |
-| Web services and staging hostname | Nmap output and HTTP responses | High |
-| Loopback URL fetch exposed the password dashboard | Browser screenshot | High |
-| Upload yielded a Windows shell | PoC output and inbound listener screenshot | High |
-| Both Installer policy values were `0x1` | Registry command output | High |
-| MSI existed at the corrected path | Directory listing in terminal screenshot | High |
-| SYSTEM access | New shell's `whoami` screenshot | High |
+| EV-001 | Service inventory and timestamped scan excerpt | Text observations available; original artifact review pending |
+| EV-002 | Initial-access behavior and identity proof | Existing narrative reviewed; sanitized artifact pending |
+| EV-003 | Privilege boundary and impact proof | Reported in narrative; original artifact review pending |
 
-The screenshots shared for review also contain transient HTB/VPN IPs and an application password. They are omitted from this public draft. The exact MSI command line after the corrected download is visible in the supplied screenshot; an installer log and flag capture were not supplied. This account is based on the user's lab output, not an independent execution by the authoring assistant.
+SYSTEM identity is supported by the prior evidence review; original screenshots are excluded because they contain sensitive values and addresses.
 
-## Remediation and detection
+The source is [the existing repository note](https://github.com/Dylans7j/HackTheBox-Walkthroughs/blob/main/love.md), reviewed at blob SHA `0c044390e93c9e49aa28bff7dd413daae2b29cce`, plus [the repository source review](./EVIDENCE-REVIEW.md). 
 
-- Restrict URL-checker destinations and schemes; resolve and validate addresses, block loopback and internal ranges, and enforce egress policy to prevent SSRF.
-- Keep sensitive dashboards inaccessible even from local web callers; require authentication and avoid plaintext credential display.
-- Validate upload content server-side, use safe generated filenames, store files outside executable web directories, and disable PHP execution in upload paths.
-- Set `AlwaysInstallElevated` to disabled in both HKLM and HKCU policies; monitor policy changes and MSI installation from user-writable directories.
-- Correlate web requests to staging's URL checker, unusual access to `/images/*.php`, Apache child process creation, and Windows Installer events. Tune for expected administrative software deployment.
+A Rooted status is not a substitute for a terminal transcript. Reported results are attributed to the existing notes; they have not been independently reproduced in this review. CVE numbers, fixed-version claims, unsupported timing claims, and numerical severity scores are withheld where primary-source verification is missing.
 
-## Lessons learned
+## 8. Findings and remediation
 
-An HTTP 403 on a directly accessed service did not prove the service was unreachable from another application on the same host. Treat exploit scripts' printed success messages as hypotheses until a shell and the intended security context are verified. When file transfer claims success, confirm the file exists at the exact path before executing it.
+| ID | Finding / review target | Remediation |
+| --- | --- | --- |
+| F-001 | SSRF and credential dashboard exposure | Validate resolved destinations and redirects, enforce egress restrictions, and authenticate sensitive dashboards. |
+| F-002 | Executable upload | Validate content; store uploads outside executable directories and disable script execution. |
+| F-003 | Elevated installer policy | Disable AlwaysInstallElevated in both policy hives and validate effective settings. |
+
+Prioritize the boundary failures that enable access or elevation. Set final severity after confirming prerequisites, affected privileges, and original evidence.
+
+## 9. Detection opportunities
+
+URL-checker requests correlated with local dashboard access; executable uploads and Apache child processes; MSI installation from user-writable directories. Tune for authorized software deployment.
+
+Collect relevant application, authentication, process, and file-change logs. Correlate events by account, host, and time; a single suspicious request is not proof of successful compromise. These are detection proposals, not tested rules or observed telemetry.
+
+## 10. Remediation validation
+
+Verify corrected permissions and authentication/authorization policy using approved test accounts and administrative configuration review. Confirm exposed secrets were rotated and removed from distributed artifacts. Validate that legitimate workflows still function and monitoring captures permitted test activity. Preserve before/after evidence without exposing sensitive values.
+
+## 11. Lessons learned and remaining work
+
+Use observed identities and access results to establish impact. Keep service exposure separate from validated weaknesses and distinguish suggested methods from executed steps. Before publication, resolve the gaps in Sections 5–7, verify platform permission, and review every image and output for secrets.
+
+[Back to walkthrough inventory](./README.md)
