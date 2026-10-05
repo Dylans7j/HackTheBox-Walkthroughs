@@ -1,64 +1,41 @@
-# Hack The Box Walkthroughs
+# Hack The Box — Security Assessments
 
-Sanitized notes from authorized Hack The Box lab work, organized around repeatable methodology, evidence, and remediation.
+Evidence-led reports by Dylan Senez / d4rkgunn3r, using the Layover report's summary, scope, methodology, numbered analysis, impact, evidence, and remediation structure.
 
-> Repository status: publication review in progress.
+## Review inventory
 
-## Publication rules
+| Report | Documentation status |
+| --- | --- |
+| [Bizness](./bizness.md) | Recorded outcome; original evidence review pending |
+| [Browsed](./browsed.md) | Recorded outcome; original evidence review pending |
+| [Devel](./devel.md) | Incomplete access/privilege proof |
+| [Facts](./facts.md) | Recorded outcome; original evidence review pending |
+| [Job](./job.md) | Recorded outcome; original evidence review pending |
+| [Love](./love.md) | Recorded outcome; original evidence review pending |
+| [Kobold](./kobold-hybrid.md) | Recorded outcome; original evidence review pending |
+| [Overwatch](./overwatch.md) | Recorded outcome; original evidence review pending |
+| [Principal](./principal.md) | Recorded outcome; original evidence review pending |
+| [Pterodactyl](./pterodactyl.md) | Recorded outcome; original evidence review pending |
 
-- Publish only retired machines or material permitted by HTB.
-- Remove flags, credentials, private keys, tokens, and raw proof strings.
-- Redact target-specific data that does not improve the learning value.
-- Separate confirmed findings from hypotheses and next steps.
-- Do not label service exposure or version detection as a vulnerability without validation.
-- Include remediation and detection opportunities where the evidence supports them.
+All proposed revisions require current platform-permission and redaction review before publication. Love's prior evidence review supports SYSTEM; this editorial pass did not independently rerun it. Devel's Rooted source status does not fill gaps in its narrative.
 
-## Current inventory
-
-The repository currently contains ten machine-note files. Each entry remains marked **Review required** until retirement status, redaction, internal links, and evidence quality have been checked.
-
-| Machine notes | Platform | Publication status |
-| --- | --- | --- |
-| [Bizness](./bizness.md) | Linux | Review required |
-| [Browsed](./browsed.md) | Linux | Review required |
-| [Devel](./devel.md) | Windows | Review required |
-| [Facts](./facts.md) | Linux | Review required |
-| [Job](./job.md) | Windows | Review required |
-| [Love](./love.md) | Windows | Published; redacted evidence review |
-| [Kobold](./kobold-hybrid.md) | Linux | Review required |
-| [Overwatch](./overwatch.md) | Windows / AD | Review required |
-| [Principal](./principal.md) | Linux | Review required |
-| [Pterodactyl](./pterodactyl.md) | Linux | Review required |
-
-## Notion evidence update — 2026-09-24
-
-The [completion inventory and publication queue](./PUBLICATION-QUEUE.md) records 62 Rooted source records across 61 distinct names. Nine have existing walkthroughs here; 52 distinct names await publication review. See the [source and screenshot review](./EVIDENCE-REVIEW.md) for what was actually available, including Job’s careers-page screenshot.
-
-## Required case-study format
+## Reporting standard
 
 1. Executive summary
-2. Authorized scope
-3. Attack-surface discovery
-4. Validated attack path
-5. Privilege-escalation path
-6. Evidence index
-7. Demonstrated impact
-8. Remediation
+2. Scope and authorization
+3. Methodology and reproducibility
+4. Reconnaissance and service analysis
+5. Recorded initial-access path
+6. Privilege escalation and impact validation
+7. Evidence register and limitations
+8. Findings and remediation
 9. Detection opportunities
-10. Lessons learned
+10. Remediation validation
+11. Lessons learned and remaining work
 
-## Evidence standard
+Keep secrets, authentication hashes, tokens, keys, VPN data, and flags out of public copies. Place evidence immediately after the supported step, with an evidence ID and caption. A placeholder is not a screenshot. Do not present version fingerprints, status fields, or suggested exploit methods as confirmed compromise.
 
-A finding should include the exact observable behavior, a sanitized supporting artifact or output excerpt, reproduction steps, impact demonstrated in the lab, and specific remediation. Potential weaknesses remain hypotheses until validated.
+Commands support discovery and evidence verification; exploit payloads and credential-extraction/elevation recipes are summarized. Every finding should state the observed behavior, prerequisites, demonstrated impact, root cause, limitations, and a specific corrective action. CVE attribution and fixes require primary-source verification.
 
-## Safety
+See [source and screenshot review](./EVIDENCE-REVIEW.md) and [publication queue](./PUBLICATION-QUEUE.md). The [SOC-Lab](https://github.com/Dylans7j/SOC-Lab) provides companion defensive investigations.
 
-All activity represented here is limited to authorized training environments. This repository should not contain active-machine spoilers or sensitive authentication material. Entries that have not completed publication review should not be promoted as portfolio case studies.
-
-Maintained by [Dylans7j](https://github.com/Dylans7j). The primary defensive-security project is the [SOC–Active Directory Lab](https://github.com/Dylans7j/SOC-Lab).
-
-## Related detection-engineering work
-
-The companion [SOC-Lab](https://github.com/Dylans7j/SOC-Lab) now documents verified Windows 11 → Splunk ingestion of Security, System, PowerShell and Sysmon telemetry, including the resolution of a Sysmon read-permission failure. The next milestone is a controlled Active Directory authentication investigation with validated SPL and Sigma detections.
-
-Public project documentation uses `192.169.70.x` only as a redaction placeholder. Do not publish actual lab, VPN or HTB target addresses unless publication is explicitly permitted. The placeholder is not an address to configure.

